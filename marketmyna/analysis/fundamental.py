@@ -310,9 +310,15 @@ class FundamentalAnalyzer:
         scores.append(growth_scores.get(growth["revenue_growth"]["rating"], 50))
 
         overall_score = sum(scores) / len(scores) if scores else 50
+        # Company quality alone (profitability, health, growth), without the rough
+        # P/E-vs-fixed-industry-table part: the report's Fundamentals section uses
+        # this, leaving price against peers to Valuation vs sector.
+        quality = scores[-3:]
+        quality_score = sum(quality) / len(quality)
 
         return {
             "overall_score": round(overall_score),
+            "quality_score": round(quality_score),
             "valuation": pe,
             "peg": peg,
             "dividend": dividend,

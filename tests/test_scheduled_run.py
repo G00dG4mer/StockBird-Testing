@@ -57,15 +57,15 @@ class TestReport:
 
     def test_default_sections(self):
         _, text = build_report([_result("RELIANCE")], ReportPrefs(), "en", now=self.NOW)
-        assert "📊 India · Standard analysis" in text
+        assert "India · Standard analysis" in text
         assert "25 Sep 2026, 08:30 IST" in text
-        assert "🧭 AI outlook" in text and "▲ Bullish: RELIANCE" in text
-        assert "📌 RELIANCE — ▲ Bullish" in text
+        assert "Bullish / Neutral / Bearish" in text and "▲ Bullish: RELIANCE" in text
+        assert "RELIANCE — BULLISH" in text
         assert "Price ₹1,219.40 (+0.50%)" in text
         for word in ("Buy", "BUY", "Target", "Stop"):
             assert word not in text
         assert "72%" not in text  # no technical verdict or confidence, only indicator values
-        assert "⚖️ Risk: medium" in text
+        assert "Risk: Medium" in text
         assert "📰" not in text  # news is opt-in
 
     def test_partial_result_shows_reason(self):
@@ -74,9 +74,9 @@ class TestReport:
         _, text = build_report([partial, _result("AAPL", market="us", decision="sell")], ReportPrefs(mode="quick"),
                                now=self.NOW)
         assert "India + US" in text
-        assert "⚠️ TCS [India]" in text
+        assert "TCS [India]" in text
         assert "AI summary unavailable: No llm_model configured" in text
-        assert "▼ Bearish: AAPL" in text and "📌 AAPL — ▼ Bearish [US]" in text
+        assert "▼ Bearish: AAPL" in text and "AAPL — BEARISH [US]" in text
 
     def test_optional_sections_render_extras(self):
         r = _result("RELIANCE")
@@ -92,19 +92,19 @@ class TestReport:
         prefs = ReportPrefs(sections=list(SECTION_IDS))
         _, text = build_report([r], prefs, now=self.NOW)
         assert "52-week range: ₹1,100.00 – ₹1,600.00" in text
-        assert "🏦 Fundamentals: Score 62/100 · P/E 22.7 · ROE 14.2%" in text
-        assert "🎯 Broker consensus of third-party analysts: bullish (26 analysts)" in text
+        assert "Fundamentals: Score 62/100 · P/E 22.7 · ROE 14.2%" in text
+        assert "Broker consensus of third-party analysts: bullish (26 analysts)" in text
         assert "strong buy" not in text and "target" not in text
-        assert "📅 Upcoming: Earnings 16 Oct 2999" in text
+        assert "Upcoming: Earnings 16 Oct 2999" in text
         assert "Ex-dividend" not in text  # past dates are dropped
         assert "• Reliance expands retail — Mint" in text
 
     def test_per_stock_sections_override(self):
         prefs = ReportPrefs(sections=["price"], stock_sections={"TCS": ["risk"]})
         _, text = build_report([_result("RELIANCE"), _result("TCS")], prefs, now=self.NOW)
-        reliance, tcs = text.split("📌 TCS")
+        reliance, tcs = text.split("▲ TCS")
         assert "Price ₹" in reliance and "Risk" not in reliance
-        assert "Risk: medium" in tcs and "Price ₹" not in tcs
+        assert "Risk: Medium" in tcs and "Price ₹" not in tcs
 
     def test_builtin_language_labels(self):
         title, text = build_report([_result("RELIANCE")], ReportPrefs(), "ta", now=self.NOW)
@@ -202,6 +202,10 @@ class TestRunner:
 
         monkeypatch.setattr(scheduled_run, "analyze_symbol", fake)
         monkeypatch.setattr(analysis_run, "market_overview", lambda markets: [])
+        monkeypatch.setattr(analysis_run, "market_sectors", lambda markets, results: {})
+        from marketmyna.services import ideas
+
+        monkeypatch.setattr(ideas, "find_ideas", lambda *a, **k: [])
         monkeypatch.setattr(scheduled_run, "_saved_prefs", lambda config: None)
         monkeypatch.setattr(scheduled_run.Config, "load", classmethod(lambda cls: Config()))
         return scheduled_run
@@ -214,7 +218,7 @@ class TestRunner:
         runner = self._patch_analysis(monkeypatch)
         code = runner.main(["--symbols", "RELIANCE,us:AAPL", "--force-run", "--dry-run", "--output-dir", str(env)])
         assert code == 0
-        assert "📌 RELIANCE — ▲ Bullish" in capsys.readouterr().out
+        assert "RELIANCE — BULLISH" in capsys.readouterr().out
         assert len(list(env.glob("marketmyna-*-en.txt"))) == 1
 
     def test_sends_to_configured_channels(self, env, monkeypatch):
@@ -234,7 +238,7 @@ class TestRunner:
 
         monkeypatch.setattr(runner, "NotificationDispatcher", FakeDispatcher)
         assert runner.main(["--symbols", "TCS", "--force-run", "--output-dir", str(env)]) == 0
-        assert "TCS — ▲ Bullish" in sent["telegram"][1]
+        assert "▲ TCS" in sent["telegram"][1] and "— BULLISH" in sent["telegram"][1]
 
     def test_all_channels_failing_exits_2(self, env, monkeypatch):
         runner = self._patch_analysis(monkeypatch)
@@ -278,9 +282,9 @@ class TestRunner:
         assert sent["telegram"][0] == "MarketMyna दैनिक रिपोर्ट"
         assert "तेज़ी: TCS, INFY" in sent["telegram"][1]
         assert sent["email"][0] == "MarketMyna daily report"
-        tcs, infy = sent["email"][1].split("📌 INFY")
+        tcs, infy = sent["email"][1].split("▲ INFY")
         assert "Price" in tcs and "Risk" not in tcs
-        assert "Risk: medium" in infy and "Price" not in infy
+        assert "Risk: Medium" in infy and "Price" not in infy
         assert {p.name.rsplit("-", 1)[1] for p in env.glob("marketmyna-*.txt")} == {"en.txt", "hi.txt"}
 
 

@@ -1,6 +1,6 @@
 """Smart messaging's report file: the same key figures every time, as PDF or
 Excel, sent as an attachment / Telegram document. Admins and the owner get
-calls; a general user gets readings of the indicators, never a call."""
+calls; a general user gets Bullish / Neutral / Bearish and why, never a call."""
 
 from __future__ import annotations
 
@@ -24,39 +24,57 @@ def _row(symbol, action="buy", **extra):
             "action": action, "reasons": ["at its buy point"], **extra}
 
 
-ROWS = [_row("TCS", ai=True, ai_summary="Strong order book."), _row("INFY", "hold"), _row("WIPRO", "sell"),
+GOOD = {"return_on_equity": 0.22, "earnings_growth": 0.18, "debt_to_equity": 0.2, "trend": "uptrend"}
+BAD = {"return_on_equity": 0.04, "revenue_growth": -0.05, "debt_to_equity": 2.1, "trend": "downtrend"}
+ROWS = [_row("TCS", ai=True, ai_summary="Strong order book.", facts=GOOD), _row("INFY", "hold", facts={"return_on_equity": 0.2, "debt_to_equity": 2.0, "trend": "sideways"}),
+        _row("WIPRO", "sell", facts=BAD),
         {"symbol": "BAD", "market": "india", "error": "no history"}]
 NOW = datetime(2026, 10, 17, 9, 0)
 
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
-    """No network: an index level, and valuation vs sector + events per stock."""
-    monkeypatch.setattr("marketmyna.services.analysis_run.market_overview",
-                        lambda markets: [{"name": "NIFTY 50", "price": 25000.0, "change_percent": 0.5}])
-    monkeypatch.setattr("marketmyna.services.report.market_review", lambda overview, results, config: "Broad rise.")
-    monkeypatch.setattr(smart_file, "_extras", lambda rows: {
+    """No network: valuation vs sector + events per stock."""
+    monkeypatch.setattr(smart_file, "_extras", lambda rows, wanted=None: {
         "TCS": {"valuation": {"position": 0.8, "zone": "below", "sector": "Technology"},
                 "events": {"earnings_date": "2026-10-24"}}})
 
 
+# Every per-stock section the file can show.
+STOCK = ["calls", "price", "levels", "technical", "risk", "valuation", "events", "ai"]
+# The rows as run_smart builds the file: every one through without_calls.
+ROWS_GENERAL = [without_calls(r) for r in ROWS]
+
+
 def _doc(rows=None, **prefs):
-    """The file as run_smart builds it: every row through without_calls."""
-    rows = [without_calls(r) for r in ROWS] if rows is None else rows
+    prefs.setdefault("sections", STOCK)
+    rows = ROWS_GENERAL if rows is None else rows
     return build_document(rows, ReportPrefs(**prefs), None, NOW, "MarketMyna · 4 stocks")
 
 
-def test_same_core_set_whatever_is_ticked():
-    doc = _doc(sections=["news", "alerts", "funds"])  # none of these go in the file
+def test_only_the_ticked_sections_go_in():
+    """The file follows the Scheduler's ticks, nothing more."""
+    assert [b.title for b in _doc(sections=["risk"]).blocks] == ["How to read this report"]
+    only_risk = _doc(sections=["risk"])
+    assert {label for label, _ in only_risk.cards[0].facts} == {"Yearly swing", "Worst fall from a high"}
+    assert only_risk.cards[0].call == "" and not only_risk.cards[0].notes
+    assert {t.label for t in only_risk.highlights} == {"Stocks"}
+    assert [r[0] for r in only_risk.blocks[0].rows] == ["Yearly swing", "Worst fall from a high"]
+    price = _doc(sections=["price"])
+    assert [b.title for b in price.blocks] == ["Stocks at a glance", "How to read this report"]
+    assert price.blocks[0].columns == ["Stock", "Name", "Price", "Day"]
+    nothing = _doc(sections=["market"])  # Market overview stays in the message
+    assert not nothing.blocks and not nothing.cards
+
+
+def test_views_and_stock_table_with_everything_ticked():
+    doc = _doc()
     titles = [b.title for b in doc.blocks]
-    assert titles == ["Market overview", "What the indicators show", "Stocks at a glance", "How to read this report"]
-    assert titles == [b.title for b in _doc(sections=["calls", "price"]).blocks]
-    readings = doc.blocks[1]
-    assert readings.rows[0][:2] == ["▲ Bullish", "TCS · AI"] and readings.rows[2][:2] == ["▼ Bearish", "WIPRO"]
-    stocks = doc.blocks[2]
-    assert stocks.columns == ["Stock", "Name", "Indicators", "Price", "Day", "Valuation vs sector", "What stands out"]
+    assert titles == ["Bullish / Neutral / Bearish", "Stocks at a glance", "How to read this report"]
+    stocks = doc.blocks[1]
+    assert stocks.columns == ["Stock", "Name", "View", "Price", "Day", "Valuation vs sector", "Why"]
     tcs = dict(zip(stocks.columns, stocks.rows[0]))
-    assert tcs["Indicators"] == "▲ Bullish · AI" and tcs["What stands out"] == "Strong order book."
+    assert tcs["View"] == "▲ Bullish · AI" and tcs["Why"] == ROWS_GENERAL[0]["why"]
     assert tcs["Valuation vs sector"] == "Priced 20% below the Technology median"
     infy = dict(zip(stocks.columns, stocks.rows[1]))
     assert infy["Valuation vs sector"] == "P/E 21.0; no sector median to compare"
@@ -70,9 +88,12 @@ def test_summary_tiles_and_stock_cards():
     card = doc.cards[0]
     facts = dict(card.facts)
     assert card.symbol == "TCS" and card.call == "▲ Bullish · AI" and card.price == "₹100.00"
-    assert "Stop loss" not in facts and facts["In 52-week range"] == "50% of range"
-    assert facts["Volatility (yearly)"] == "22%" and facts["Next results"] == "2026-10-24"
-    assert card.notes == [[("AI summary of the figures", "Strong order book.", "accent"),
+    assert not {"Stop", "Support", "Resistance", "AI target"} & set(facts)
+    assert facts["Where it sits"] == "50% up from low"
+    assert facts["Yearly swing"] == "22%" and facts["Worst fall from a high"] == "18%"
+    assert facts["Next results"] == "2026-10-24"
+    assert card.notes == [[("Why bullish", ROWS_GENERAL[0]["why"], "accent"),
+                           ("AI summary", "Strong order book.", "accent"),
                            ("Valuation vs sector", "Priced 20% below the Technology median", "accent")]]
     assert len(doc.cards) == 3 and doc.notice  # the stock without data has no card
 
@@ -80,18 +101,21 @@ def test_summary_tiles_and_stock_cards():
 def test_general_users_get_readings_never_calls():
     rows = [without_calls(r) for r in ROWS]
     assert "action" not in rows[0] and "buy_point" not in rows[0] and "stop_loss" not in rows[0]
-    assert rows[0]["reading"] == "positive" and rows[2]["reading"] == "negative"
+    assert [r["reading"] for r in rows[:3]] == ["bullish", "neutral", "bearish"]
+    assert rows[0]["why"].startswith("strong return on equity (ROE 22%), profit up 18% year on year")
+    assert "high debt (debt/equity 2.1)" in rows[2]["why"]
     assert rows[0]["reasons"] == ["near its support level"] and rows[0]["valuation"] is None
     doc = _doc(rows)
-    assert doc.notice.startswith("This report describes what the market data shows")
+    assert doc.notice.startswith("Bullish / Neutral / Bearish sums up")
     titles = [b.title for b in doc.blocks]
-    assert "Buy / Hold / Sell" not in titles and "What the indicators show" in titles
+    assert "Buy / Hold / Sell" not in titles and "Bullish / Neutral / Bearish" in titles
     stocks = next(b for b in doc.blocks if b.title == "Stocks at a glance")
     tcs = dict(zip(stocks.columns, stocks.rows[0]))
-    assert tcs["Indicators"] == "▲ Bullish · AI" and "Call" not in stocks.columns
+    assert tcs["View"] == "▲ Bullish · AI" and "Call" not in stocks.columns
+    assert tcs["Why"] == rows[0]["why"]
     assert tcs["Valuation vs sector"] == "Priced 20% below the Technology median"  # no "undervalued"
     facts = dict(doc.cards[0].facts)
-    assert not {"Stop loss", "Buy at or below", "Sell at or above"} & set(facts)
+    assert not {"Stop", "Support", "Resistance", "AI target"} & set(facts)
     assert {t.label for t in doc.highlights} >= {"Bullish", "Neutral", "Bearish"}
     text = " ".join(str(v) for b in doc.blocks for row in b.rows for v in row)
     for word in ("BUY", "SELL", "Undervalued", "Overvalued", "Stop"):
@@ -117,9 +141,9 @@ def test_pdf_and_excel_render():
     tcs = {h.value: c for h, c in zip(wb["Stocks"][1], wb["Stocks"][2])}
     assert tcs["Stock"].value == "TCS" and tcs["Price"].value == 100 and tcs["Day"].value == 0.015
     assert "0.0%" in tcs["Day"].number_format  # numbers sort as numbers
-    assert any(c.value == "What the indicators show" for c in wb["Summary"]["A"])
+    assert any(c.value == "Bullish / Neutral / Bearish" for c in wb["Summary"]["A"])
     details = {h.value: c.value for h, c in zip(wb["Stock details"][1], wb["Stock details"][2])}
-    assert details["AI summary of the figures"] == "Strong order book." and "Stop loss" not in details
+    assert details["AI summary"] == "Strong order book." and "Stop" not in details
 
 
 def test_wide_tables_fit_the_page_without_breaking_numbers():
@@ -181,3 +205,34 @@ def test_email_attaches_excel_with_its_type(monkeypatch):
                                                email_smtp_ssl=True, email_sender_name=None))
     assert sender.send("body", title="Report", attachments=[("r.xlsx", b"PK..")])
     assert "spreadsheetml.sheet" in sent[0] and 'filename="r.xlsx"' in sent[0]
+
+
+def test_ticked_sections_go_into_the_file(monkeypatch):
+    """Smart messaging's file carries every ticked section but Market
+    overview (2026-10-27): alerts, hot lists and ideas as tables, and
+    fundamentals, analysts and news on the cards."""
+    from marketmyna.services import analysis_run, ideas
+
+    monkeypatch.setattr(smart_file, "_extras", lambda rows, wanted=None: {"TCS": {
+        "fundamentals": {"overall_score": 71, "profitability": {"roe": {"value": 48.0}}},
+        "analysts": {"recommendation": "buy", "target_mean": 4200, "count": 30},
+        "news": [{"title": "TCS wins a large deal", "source": "Mint"}]}})
+    monkeypatch.setattr(analysis_run, "alert_digest", lambda results, config: {
+        "fired": [{"symbol": "TCS", "message": "TCS rose above 3,400"}], "near": [], "active": 2})
+    monkeypatch.setattr(analysis_run, "hot_blocks", lambda results, sections, **kw: [
+        {"section": "hot_invest", "area": "investor", "detail": False, "markets": {"india": [
+            {"key": "quality_dip", "title": "Quality on a dip", "rows": [{"symbol": "HDFC", "why": "ROE 17%"}]}]}}])
+    monkeypatch.setattr(ideas, "find_ideas", lambda *a, **k: [
+        {"symbol": "KPIT", "name": "KPIT", "market": "india", "price": 1482.0, "figures": {"roe": 28.0},
+         "reason": "Growing fast.", "watch": "High P/E."}])
+    doc = build_document(ROWS, ReportPrefs(sections=["market", "alerts", "hot_invest", "ideas", "fundamentals",
+                                                     "analysts", "news"]), SimpleNamespace(), NOW, "t")
+    titles = [b.title for b in doc.blocks]
+    assert {"Your alerts", "Trending for investors", "Stocks matching your screen"} <= set(titles)
+    assert "Market overview" not in titles
+    card = doc.cards[0]
+    facts = dict(card.facts)
+    assert facts["Quality score"] == "71/100" and facts["Broker consensus"] == "Bullish · 30 analysts"
+    assert "Analysts' avg target" not in facts  # a direction only, no brokers' price target
+    assert card.news == ["TCS wins a large deal — Mint"]
+    assert to_pdf(doc)[:4] == b"%PDF" and to_xlsx(doc)[:2] == b"PK"

@@ -12,6 +12,9 @@ is configured, for every language.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 # code -> (native name, English name)
 BUILTIN_LANGUAGES: dict[str, tuple[str, str]] = {
     "en": ("English", "English"),
@@ -61,8 +64,11 @@ _EN = {
     "calls": "Today's calls",
     "buy": "Buy", "hold": "Hold", "sell": "Sell", "incomplete": "Incomplete",
     "market_overview": "Market overview",
+    "mood_up": "up", "mood_down": "down", "mood_flat": "flat", "mood_mixed": "mixed",
+    "sectors_gaining": "Gaining strength", "sectors_losing": "Losing strength", "your_sectors": "Your sectors",
     "price": "Price", "target": "Target", "stop": "Stop", "range_52w": "52-week range",
     "ai_view": "AI view", "ai_unavailable": "AI summary unavailable",
+    "ai_with_pro": "AI summary: add an AI key in Settings -> AI keys to get the AI's read of this stock.",
     "technical": "Technical", "indicators": "Indicators",
     "fundamentals": "Fundamentals", "score": "Score", "valuation": "Valuation", "pe": "P/E",
     "roe": "ROE", "health": "Financial health", "revenue_growth": "Revenue growth", "dividend_yield": "Dividend yield",
@@ -76,7 +82,7 @@ _EN = {
     "disclaimer": "Not investment advice. Sent by MarketMyna.",
     "normal": "Normal range",
     "reading_positive": "bullish", "reading_mixed": "neutral", "reading_negative": "bearish",
-    "reading_note": "ℹ️ This shows what the data reads, not a buy or sell call. ▲ bullish / ▼ bearish "
+    "reading_note": "This shows what the data reads, not a buy or sell call. ▲ bullish / ▼ bearish "
                     "= how most indicators lean today.",
     # Public (analytics) deploys: facts and comparisons, no calls (other languages fall back to these)
     "movers": "Movers in your list",
@@ -86,7 +92,6 @@ _EN = {
     "near_low": "Within 3% of 52-week low",
     "ai_summary": "AI summary",
     "readings": "Technical readings",
-    "outlook": "AI outlook",
     "consensus_src": "Broker consensus of third-party analysts",
     "valuation_vs_sector": "Valuation vs sector",
     "zone_below": "Below sector",
@@ -105,18 +110,34 @@ _EN = {
     "your_alerts": "Your alerts", "alerts_fired": "{n} fired since the last report",
     "alerts_near": "Close to their trigger", "alerts_quiet": "{n} active, none close to triggering",
     "hot_trade": "Hot for trading", "hot_invest": "Trending for investors",
+    # Added 2026-10-27: a general user's Bullish / Neutral / Bearish view (marketmyna/services/outlook.py)
+    "outlook": "Bullish / Neutral / Bearish", "why": "Why",
+    "funds_watched": "Funds you watch (not owned)",
+    "range_position": "{pct}% of the way from low to high",
+    "swings_year": "swings ~{pct}% a year", "fell_from_high": "fell up to {pct}% from a high",
+    "ideas_public": "Stocks matching your screen", "watch": "Watch", "rethink": "Rethink if",
+    "flags": "Note",
+    "ideas_note": "A screen of trend and company figures with an AI note, not a recommendation to buy. "
+                  "Research each one yourself or ask a SEBI-registered adviser.",
+    "invest_note": "Screens of company figures, not recommendations.",
+    "invest_note_detail": "Screens of company figures, not recommendations. Before deciding, check the latest "
+                          "results, debt trend and sector news.",
+    "outlook_note": "This sums up what each company's figures and price trend show, not a buy or sell call. "
+                    "Do your own research or ask a SEBI-registered adviser.",
 }
 
 # Words that appear as values (signals, levels, ratings).
 # Labels added for public (analytics) deploys on 2026-10-03; until translated,
 # every language shows these in English (t() falls back to _EN).
 PENDING_TRANSLATION = {
-    "outlook", "movers", "up_most", "down_most", "near_high", "near_low", "ai_summary", "readings", "consensus_src",
+    "outlook", "ai_with_pro", "movers", "up_most", "down_most", "near_high", "near_low", "ai_summary", "readings", "consensus_src",
     "valuation_vs_sector", "zone_below", "zone_in_line", "zone_above",
     "zone_below_personal", "zone_in_line_personal", "zone_above_personal",
     "dip_check", "lumpsum_strong", "lumpsum_watch",
     "support", "resistance", "normal_range", "week_range", "today", "total_gain",
     "your_alerts", "alerts_fired", "alerts_near", "alerts_quiet", "hot_trade", "hot_invest",
+    "outlook", "why", "outlook_note", "funds_watched", "range_position", "swings_year", "fell_from_high", "invest_note", "invest_note_detail", "ideas_public", "watch", "ideas_note",
+    "rethink", "flags",
 }
 
 _EN_VALUES = {
@@ -130,6 +151,8 @@ _EN_VALUES = {
 
 _STRINGS: dict[str, dict[str, str]] = {
     "hi": {
+        "mood_up": "बढ़त", "mood_down": "गिरावट", "mood_flat": "सपाट", "mood_mixed": "मिला-जुला",
+        "sectors_gaining": "मज़बूत हो रहे सेक्टर", "sectors_losing": "कमज़ोर हो रहे सेक्टर", "your_sectors": "आपके सेक्टर",
         "title": "MarketMyna दैनिक रिपोर्ट", "analysis": "{mode} विश्लेषण",
         "mode_quick": "त्वरित", "mode_standard": "मानक", "mode_full": "पूर्ण", "mode_specialist": "विशेषज्ञ",
         "calls": "आज की सलाह", "buy": "खरीदें", "hold": "होल्ड करें", "sell": "बेचें", "incomplete": "अधूरा",
@@ -146,10 +169,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "यह निवेश सलाह नहीं है। MarketMyna द्वारा भेजा गया।",
         "normal": "सामान्य दायरा",
         "reading_positive": "तेज़ी", "reading_mixed": "तटस्थ", "reading_negative": "मंदी",
-        "reading_note": "ℹ️ यह आंकड़ों की स्थिति बताता है, खरीदने या बेचने की सलाह नहीं। ▲ तेज़ी / ▼ मंदी = आज ज़्यादातर संकेतकों का झुकाव।",
+        "reading_note": "यह आंकड़ों की स्थिति बताता है, खरीदने या बेचने की सलाह नहीं। ▲ तेज़ी / ▼ मंदी = आज ज़्यादातर संकेतकों का झुकाव।",
         "english_note": "कुछ विवरण अंग्रेज़ी में हैं (अनुवाद के लिए AI मॉडल सेट करें)।",
     },
     "ta": {
+        "mood_up": "உயர்வு", "mood_down": "சரிவு", "mood_flat": "மாற்றமின்றி", "mood_mixed": "கலவையான",
+        "sectors_gaining": "வலுப்பெறும் துறைகள்", "sectors_losing": "வலுவிழக்கும் துறைகள்", "your_sectors": "உங்கள் துறைகள்",
         "title": "MarketMyna தினசரி அறிக்கை", "analysis": "{mode} பகுப்பாய்வு",
         "mode_quick": "விரைவு", "mode_standard": "நிலையான", "mode_full": "முழு", "mode_specialist": "நிபுணர்",
         "calls": "இன்றைய பரிந்துரைகள்", "buy": "வாங்கவும்", "hold": "வைத்திருக்கவும்", "sell": "விற்கவும்",
@@ -166,10 +191,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "இது முதலீட்டு ஆலோசனை அல்ல. MarketMyna அனுப்பியது.",
         "normal": "இயல்பான வரம்பு",
         "reading_positive": "ஏற்றம்", "reading_mixed": "நடுநிலை", "reading_negative": "இறக்கம்",
-        "reading_note": "ℹ️ இது தரவு காட்டுவதை விவரிக்கிறது, வாங்க அல்லது விற்க பரிந்துரை அல்ல. ▲ ஏற்றம் / ▼ இறக்கம் = இன்று பெரும்பாலான குறிகாட்டிகளின் சாய்வு.",
+        "reading_note": "இது தரவு காட்டுவதை விவரிக்கிறது, வாங்க அல்லது விற்க பரிந்துரை அல்ல. ▲ ஏற்றம் / ▼ இறக்கம் = இன்று பெரும்பாலான குறிகாட்டிகளின் சாய்வு.",
         "english_note": "சில விவரங்கள் ஆங்கிலத்தில் உள்ளன (மொழிபெயர்க்க AI மாதிரியை அமைக்கவும்).",
     },
     "te": {
+        "mood_up": "పెరుగుదల", "mood_down": "పతనం", "mood_flat": "స్థిరం", "mood_mixed": "మిశ్రమం",
+        "sectors_gaining": "బలపడుతున్న రంగాలు", "sectors_losing": "బలహీనపడుతున్న రంగాలు", "your_sectors": "మీ రంగాలు",
         "title": "MarketMyna రోజువారీ నివేదిక", "analysis": "{mode} విశ్లేషణ",
         "mode_quick": "త్వరిత", "mode_standard": "ప్రామాణిక", "mode_full": "పూర్తి", "mode_specialist": "నిపుణ",
         "calls": "నేటి సిఫార్సులు", "buy": "కొనండి", "hold": "ఉంచుకోండి", "sell": "అమ్మండి", "incomplete": "అసంపూర్ణం",
@@ -185,10 +212,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ఇది పెట్టుబడి సలహా కాదు. MarketMyna పంపింది.",
         "normal": "సాధారణ పరిధి",
         "reading_positive": "బుల్లిష్", "reading_mixed": "తటస్థం", "reading_negative": "బేరిష్",
-        "reading_note": "ℹ️ ఇది డేటా చూపేదాన్ని వివరిస్తుంది, కొనమని లేదా అమ్మమని సలహా కాదు. ▲ బుల్లిష్ / ▼ బేరిష్ = ఈరోజు చాలా సూచికల మొగ్గు.",
+        "reading_note": "ఇది డేటా చూపేదాన్ని వివరిస్తుంది, కొనమని లేదా అమ్మమని సలహా కాదు. ▲ బుల్లిష్ / ▼ బేరిష్ = ఈరోజు చాలా సూచికల మొగ్గు.",
         "english_note": "కొన్ని వివరాలు ఇంగ్లీష్‌లో ఉన్నాయి (అనువాదానికి AI మోడల్‌ను సెట్ చేయండి).",
     },
     "kn": {
+        "mood_up": "ಏರಿಕೆ", "mood_down": "ಇಳಿಕೆ", "mood_flat": "ಸ್ಥಿರ", "mood_mixed": "ಮಿಶ್ರ",
+        "sectors_gaining": "ಬಲಗೊಳ್ಳುತ್ತಿರುವ ವಲಯಗಳು", "sectors_losing": "ದುರ್ಬಲಗೊಳ್ಳುತ್ತಿರುವ ವಲಯಗಳು", "your_sectors": "ನಿಮ್ಮ ವಲಯಗಳು",
         "title": "MarketMyna ದೈನಂದಿನ ವರದಿ", "analysis": "{mode} ವಿಶ್ಲೇಷಣೆ",
         "mode_quick": "ತ್ವರಿತ", "mode_standard": "ಪ್ರಮಾಣಿತ", "mode_full": "ಪೂರ್ಣ", "mode_specialist": "ತಜ್ಞ",
         "calls": "ಇಂದಿನ ಶಿಫಾರಸುಗಳು", "buy": "ಖರೀದಿಸಿ", "hold": "ಇಟ್ಟುಕೊಳ್ಳಿ", "sell": "ಮಾರಾಟ ಮಾಡಿ", "incomplete": "ಅಪೂರ್ಣ",
@@ -204,10 +233,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ಇದು ಹೂಡಿಕೆ ಸಲಹೆಯಲ್ಲ. MarketMyna ಕಳುಹಿಸಿದೆ.",
         "normal": "ಸಾಮಾನ್ಯ ವ್ಯಾಪ್ತಿ",
         "reading_positive": "ಏರಿಕೆ", "reading_mixed": "ತಟಸ್ಥ", "reading_negative": "ಇಳಿಕೆ",
-        "reading_note": "ℹ️ ಇದು ದತ್ತಾಂಶ ತೋರಿಸುವುದನ್ನು ವಿವರಿಸುತ್ತದೆ, ಖರೀದಿ ಅಥವಾ ಮಾರಾಟದ ಸಲಹೆಯಲ್ಲ. ▲ ಏರಿಕೆ / ▼ ಇಳಿಕೆ = ಇಂದು ಹೆಚ್ಚಿನ ಸೂಚಕಗಳ ಒಲವು.",
+        "reading_note": "ಇದು ದತ್ತಾಂಶ ತೋರಿಸುವುದನ್ನು ವಿವರಿಸುತ್ತದೆ, ಖರೀದಿ ಅಥವಾ ಮಾರಾಟದ ಸಲಹೆಯಲ್ಲ. ▲ ಏರಿಕೆ / ▼ ಇಳಿಕೆ = ಇಂದು ಹೆಚ್ಚಿನ ಸೂಚಕಗಳ ಒಲವು.",
         "english_note": "ಕೆಲವು ವಿವರಗಳು ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿವೆ (ಅನುವಾದಕ್ಕೆ AI ಮಾದರಿಯನ್ನು ಹೊಂದಿಸಿ).",
     },
     "ml": {
+        "mood_up": "ഉയർച്ച", "mood_down": "ഇടിവ്", "mood_flat": "മാറ്റമില്ല", "mood_mixed": "സമ്മിശ്രം",
+        "sectors_gaining": "ശക്തി നേടുന്ന മേഖലകൾ", "sectors_losing": "ശക്തി കുറയുന്ന മേഖലകൾ", "your_sectors": "നിങ്ങളുടെ മേഖലകൾ",
         "title": "MarketMyna ദൈനംദിന റിപ്പോർട്ട്", "analysis": "{mode} വിശകലനം",
         "mode_quick": "വേഗത്തിലുള്ള", "mode_standard": "സാധാരണ", "mode_full": "പൂർണ്ണ", "mode_specialist": "വിദഗ്ധ",
         "calls": "ഇന്നത്തെ നിർദേശങ്ങൾ", "buy": "വാങ്ങുക", "hold": "കൈവശം വയ്ക്കുക", "sell": "വിൽക്കുക",
@@ -224,10 +255,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ഇത് നിക്ഷേപ ഉപദേശമല്ല. MarketMyna അയച്ചത്.",
         "normal": "സാധാരണ പരിധി",
         "reading_positive": "ഉയർച്ച", "reading_mixed": "നിഷ്പക്ഷം", "reading_negative": "താഴ്ച",
-        "reading_note": "ℹ️ ഇത് ഡാറ്റ കാണിക്കുന്നത് വിവരിക്കുന്നു, വാങ്ങാനോ വിൽക്കാനോ ഉള്ള ശുപാർശയല്ല. ▲ ഉയർച്ച / ▼ താഴ്ച = ഇന്ന് മിക്ക സൂചകങ്ങളുടെയും ചായ്‌വ്.",
+        "reading_note": "ഇത് ഡാറ്റ കാണിക്കുന്നത് വിവരിക്കുന്നു, വാങ്ങാനോ വിൽക്കാനോ ഉള്ള ശുപാർശയല്ല. ▲ ഉയർച്ച / ▼ താഴ്ച = ഇന്ന് മിക്ക സൂചകങ്ങളുടെയും ചായ്‌വ്.",
         "english_note": "ചില വിവരങ്ങൾ ഇംഗ്ലീഷിലാണ് (വിവർത്തനത്തിന് AI മോഡൽ സജ്ജമാക്കുക).",
     },
     "mr": {
+        "mood_up": "तेजी", "mood_down": "घसरण", "mood_flat": "स्थिर", "mood_mixed": "संमिश्र",
+        "sectors_gaining": "मजबूत होणारे क्षेत्र", "sectors_losing": "कमजोर होणारे क्षेत्र", "your_sectors": "तुमचे क्षेत्र",
         "title": "MarketMyna दैनिक अहवाल", "analysis": "{mode} विश्लेषण",
         "mode_quick": "जलद", "mode_standard": "मानक", "mode_full": "संपूर्ण", "mode_specialist": "तज्ज्ञ",
         "calls": "आजच्या शिफारसी", "buy": "खरेदी करा", "hold": "होल्ड करा", "sell": "विक्री करा", "incomplete": "अपूर्ण",
@@ -243,10 +276,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "हा गुंतवणूक सल्ला नाही. MarketMyna कडून पाठवले.",
         "normal": "सामान्य मर्यादा",
         "reading_positive": "तेजी", "reading_mixed": "तटस्थ", "reading_negative": "मंदी",
-        "reading_note": "ℹ️ हे आकडेवारी काय दाखवते ते सांगते, खरेदी किंवा विक्रीचा सल्ला नाही. ▲ तेजी / ▼ मंदी = आज बहुतेक निर्देशकांचा कल.",
+        "reading_note": "हे आकडेवारी काय दाखवते ते सांगते, खरेदी किंवा विक्रीचा सल्ला नाही. ▲ तेजी / ▼ मंदी = आज बहुतेक निर्देशकांचा कल.",
         "english_note": "काही तपशील इंग्रजीत आहेत (भाषांतरासाठी AI मॉडेल सेट करा).",
     },
     "bn": {
+        "mood_up": "ঊর্ধ্বমুখী", "mood_down": "নিম্নমুখী", "mood_flat": "স্থির", "mood_mixed": "মিশ্র",
+        "sectors_gaining": "শক্তিশালী হচ্ছে যে খাত", "sectors_losing": "দুর্বল হচ্ছে যে খাত", "your_sectors": "আপনার খাত",
         "title": "MarketMyna দৈনিক রিপোর্ট", "analysis": "{mode} বিশ্লেষণ",
         "mode_quick": "দ্রুত", "mode_standard": "মানক", "mode_full": "সম্পূর্ণ", "mode_specialist": "বিশেষজ্ঞ",
         "calls": "আজকের পরামর্শ", "buy": "কিনুন", "hold": "ধরে রাখুন", "sell": "বিক্রি করুন", "incomplete": "অসম্পূর্ণ",
@@ -262,10 +297,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "এটি বিনিয়োগ পরামর্শ নয়। MarketMyna পাঠিয়েছে।",
         "normal": "স্বাভাবিক সীমা",
         "reading_positive": "ঊর্ধ্বমুখী", "reading_mixed": "নিরপেক্ষ", "reading_negative": "নিম্নমুখী",
-        "reading_note": "ℹ️ এটি ডেটা যা দেখায় তা বর্ণনা করে, কেনা বা বেচার পরামর্শ নয়। ▲ ঊর্ধ্বমুখী / ▼ নিম্নমুখী = আজ বেশিরভাগ সূচকের ঝোঁক।",
+        "reading_note": "এটি ডেটা যা দেখায় তা বর্ণনা করে, কেনা বা বেচার পরামর্শ নয়। ▲ ঊর্ধ্বমুখী / ▼ নিম্নমুখী = আজ বেশিরভাগ সূচকের ঝোঁক।",
         "english_note": "কিছু বিবরণ ইংরেজিতে আছে (অনুবাদের জন্য AI মডেল সেট করুন)।",
     },
     "gu": {
+        "mood_up": "તેજી", "mood_down": "ઘટાડો", "mood_flat": "સ્થિર", "mood_mixed": "મિશ્ર",
+        "sectors_gaining": "મજબૂત થતા ક્ષેત્રો", "sectors_losing": "નબળા પડતા ક્ષેત્રો", "your_sectors": "તમારા ક્ષેત્રો",
         "title": "MarketMyna દૈનિક અહેવાલ", "analysis": "{mode} વિશ્લેષણ",
         "mode_quick": "ઝડપી", "mode_standard": "માનક", "mode_full": "સંપૂર્ણ", "mode_specialist": "નિષ્ણાત",
         "calls": "આજની ભલામણો", "buy": "ખરીદો", "hold": "હોલ્ડ કરો", "sell": "વેચો", "incomplete": "અધૂરું",
@@ -281,10 +318,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "આ રોકાણ સલાહ નથી. MarketMyna દ્વારા મોકલાયું.",
         "normal": "સામાન્ય શ્રેણી",
         "reading_positive": "તેજી", "reading_mixed": "તટસ્થ", "reading_negative": "મંદી",
-        "reading_note": "ℹ️ આ ડેટા શું બતાવે છે તે જણાવે છે, ખરીદવા કે વેચવાની સલાહ નથી. ▲ તેજી / ▼ મંદી = આજે મોટાભાગના સૂચકોનો ઝુકાવ.",
+        "reading_note": "આ ડેટા શું બતાવે છે તે જણાવે છે, ખરીદવા કે વેચવાની સલાહ નથી. ▲ તેજી / ▼ મંદી = આજે મોટાભાગના સૂચકોનો ઝુકાવ.",
         "english_note": "કેટલીક વિગતો અંગ્રેજીમાં છે (અનુવાદ માટે AI મોડેલ સેટ કરો).",
     },
     "pa": {
+        "mood_up": "ਵਾਧਾ", "mood_down": "ਗਿਰਾਵਟ", "mood_flat": "ਸਥਿਰ", "mood_mixed": "ਮਿਲਿਆ-ਜੁਲਿਆ",
+        "sectors_gaining": "ਮਜ਼ਬੂਤ ਹੋ ਰਹੇ ਸੈਕਟਰ", "sectors_losing": "ਕਮਜ਼ੋਰ ਹੋ ਰਹੇ ਸੈਕਟਰ", "your_sectors": "ਤੁਹਾਡੇ ਸੈਕਟਰ",
         "title": "MarketMyna ਰੋਜ਼ਾਨਾ ਰਿਪੋਰਟ", "analysis": "{mode} ਵਿਸ਼ਲੇਸ਼ਣ",
         "mode_quick": "ਤੇਜ਼", "mode_standard": "ਮਿਆਰੀ", "mode_full": "ਪੂਰਾ", "mode_specialist": "ਮਾਹਰ",
         "calls": "ਅੱਜ ਦੀਆਂ ਸਿਫ਼ਾਰਸ਼ਾਂ", "buy": "ਖਰੀਦੋ", "hold": "ਰੱਖੋ", "sell": "ਵੇਚੋ", "incomplete": "ਅਧੂਰਾ",
@@ -300,10 +339,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ਇਹ ਨਿਵੇਸ਼ ਸਲਾਹ ਨਹੀਂ ਹੈ। MarketMyna ਵੱਲੋਂ ਭੇਜਿਆ ਗਿਆ।",
         "normal": "ਆਮ ਦਾਇਰਾ",
         "reading_positive": "ਤੇਜ਼ੀ", "reading_mixed": "ਨਿਰਪੱਖ", "reading_negative": "ਮੰਦੀ",
-        "reading_note": "ℹ️ ਇਹ ਡਾਟਾ ਕੀ ਦਿਖਾਉਂਦਾ ਹੈ ਉਹ ਦੱਸਦਾ ਹੈ, ਖਰੀਦਣ ਜਾਂ ਵੇਚਣ ਦੀ ਸਲਾਹ ਨਹੀਂ। ▲ ਤੇਜ਼ੀ / ▼ ਮੰਦੀ = ਅੱਜ ਜ਼ਿਆਦਾਤਰ ਸੂਚਕਾਂ ਦਾ ਝੁਕਾਅ।",
+        "reading_note": "ਇਹ ਡਾਟਾ ਕੀ ਦਿਖਾਉਂਦਾ ਹੈ ਉਹ ਦੱਸਦਾ ਹੈ, ਖਰੀਦਣ ਜਾਂ ਵੇਚਣ ਦੀ ਸਲਾਹ ਨਹੀਂ। ▲ ਤੇਜ਼ੀ / ▼ ਮੰਦੀ = ਅੱਜ ਜ਼ਿਆਦਾਤਰ ਸੂਚਕਾਂ ਦਾ ਝੁਕਾਅ।",
         "english_note": "ਕੁਝ ਵੇਰਵੇ ਅੰਗਰੇਜ਼ੀ ਵਿੱਚ ਹਨ (ਅਨੁਵਾਦ ਲਈ AI ਮਾਡਲ ਸੈੱਟ ਕਰੋ)।",
     },
     "ur": {
+        "mood_up": "تیزی", "mood_down": "مندی", "mood_flat": "مستحکم", "mood_mixed": "ملا جلا",
+        "sectors_gaining": "مضبوط ہوتے شعبے", "sectors_losing": "کمزور ہوتے شعبے", "your_sectors": "آپ کے شعبے",
         "title": "MarketMyna روزانہ رپورٹ", "analysis": "{mode} تجزیہ",
         "mode_quick": "فوری", "mode_standard": "معیاری", "mode_full": "مکمل", "mode_specialist": "ماہرانہ",
         "calls": "آج کی سفارشات", "buy": "خریدیں", "hold": "رکھیں", "sell": "بیچیں", "incomplete": "نامکمل",
@@ -319,10 +360,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "یہ سرمایہ کاری کا مشورہ نہیں ہے۔ MarketMyna کی طرف سے بھیجا گیا۔",
         "normal": "معمول کی حد",
         "reading_positive": "تیزی", "reading_mixed": "غیر جانبدار", "reading_negative": "مندی",
-        "reading_note": "ℹ️ یہ بتاتا ہے کہ ڈیٹا کیا دکھاتا ہے، خریدنے یا بیچنے کا مشورہ نہیں۔ ▲ تیزی / ▼ مندی = آج زیادہ تر اشاریوں کا رجحان۔",
+        "reading_note": "یہ بتاتا ہے کہ ڈیٹا کیا دکھاتا ہے، خریدنے یا بیچنے کا مشورہ نہیں۔ ▲ تیزی / ▼ مندی = آج زیادہ تر اشاریوں کا رجحان۔",
         "english_note": "کچھ تفصیلات انگریزی میں ہیں (ترجمے کے لیے AI ماڈل سیٹ کریں)۔",
     },
     "or": {
+        "mood_up": "ବୃଦ୍ଧି", "mood_down": "ହ୍ରାସ", "mood_flat": "ସ୍ଥିର", "mood_mixed": "ମିଶ୍ରିତ",
+        "sectors_gaining": "ଶକ୍ତିଶାଳୀ ହେଉଥିବା କ୍ଷେତ୍ର", "sectors_losing": "ଦୁର୍ବଳ ହେଉଥିବା କ୍ଷେତ୍ର", "your_sectors": "ଆପଣଙ୍କ କ୍ଷେତ୍ର",
         "title": "MarketMyna ଦୈନିକ ରିପୋର୍ଟ", "analysis": "{mode} ବିଶ୍ଳେଷଣ",
         "mode_quick": "ଦ୍ରୁତ", "mode_standard": "ମାନକ", "mode_full": "ସମ୍ପୂର୍ଣ୍ଣ", "mode_specialist": "ବିଶେଷଜ୍ଞ",
         "calls": "ଆଜିର ପରାମର୍ଶ", "buy": "କିଣନ୍ତୁ", "hold": "ରଖନ୍ତୁ", "sell": "ବିକ୍ରି କରନ୍ତୁ", "incomplete": "ଅସମ୍ପୂର୍ଣ୍ଣ",
@@ -338,10 +381,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ଏହା ନିବେଶ ପରାମର୍ଶ ନୁହେଁ। MarketMyna ପଠାଇଛି।",
         "normal": "ସାଧାରଣ ସୀମା",
         "reading_positive": "ଉର୍ଦ୍ଧ୍ୱମୁଖୀ", "reading_mixed": "ନିରପେକ୍ଷ", "reading_negative": "ନିମ୍ନମୁଖୀ",
-        "reading_note": "ℹ️ ଏହା ତଥ୍ୟ କଣ ଦେଖାଉଛି ତାହା ବର୍ଣ୍ଣନା କରେ, କିଣିବା କିମ୍ବା ବିକିବାର ପରାମର୍ଶ ନୁହେଁ। ▲ ଉର୍ଦ୍ଧ୍ୱମୁଖୀ / ▼ ନିମ୍ନମୁଖୀ = ଆଜି ଅଧିକାଂଶ ସୂଚକର ଝୁକାବ।",
+        "reading_note": "ଏହା ତଥ୍ୟ କଣ ଦେଖାଉଛି ତାହା ବର୍ଣ୍ଣନା କରେ, କିଣିବା କିମ୍ବା ବିକିବାର ପରାମର୍ଶ ନୁହେଁ। ▲ ଉର୍ଦ୍ଧ୍ୱମୁଖୀ / ▼ ନିମ୍ନମୁଖୀ = ଆଜି ଅଧିକାଂଶ ସୂଚକର ଝୁକାବ।",
         "english_note": "କିଛି ବିବରଣୀ ଇଂରାଜୀରେ ଅଛି (ଅନୁବାଦ ପାଇଁ AI ମଡେଲ୍ ସେଟ୍ କରନ୍ତୁ)।",
     },
     "zh": {
+        "mood_up": "上涨", "mood_down": "下跌", "mood_flat": "持平", "mood_mixed": "涨跌互现",
+        "sectors_gaining": "走强板块", "sectors_losing": "走弱板块", "your_sectors": "您持有的板块",
         "title": "MarketMyna 每日报告", "analysis": "{mode}分析",
         "mode_quick": "快速", "mode_standard": "标准", "mode_full": "完整", "mode_specialist": "专家",
         "calls": "今日建议", "buy": "买入", "hold": "持有", "sell": "卖出", "incomplete": "未完成",
@@ -357,10 +402,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "不构成投资建议。由 MarketMyna 发送。",
         "normal": "正常区间",
         "reading_positive": "看涨", "reading_mixed": "中性", "reading_negative": "看跌",
-        "reading_note": "ℹ️ 这里描述的是数据显示的情况，并非买入或卖出建议。▲ 看涨 / ▼ 看跌 = 今天多数指标的倾向。",
+        "reading_note": "这里描述的是数据显示的情况，并非买入或卖出建议。▲ 看涨 / ▼ 看跌 = 今天多数指标的倾向。",
         "english_note": "部分内容为英文（配置 AI 模型后可自动翻译）。",
     },
     "ja": {
+        "mood_up": "上昇", "mood_down": "下落", "mood_flat": "横ばい", "mood_mixed": "まちまち",
+        "sectors_gaining": "強まるセクター", "sectors_losing": "弱まるセクター", "your_sectors": "保有セクター",
         "title": "MarketMyna 日次レポート", "analysis": "{mode}分析",
         "mode_quick": "クイック", "mode_standard": "標準", "mode_full": "フル", "mode_specialist": "専門",
         "calls": "本日の判断", "buy": "買い", "hold": "保有", "sell": "売り", "incomplete": "未完了",
@@ -376,10 +423,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "投資助言ではありません。MarketMyna より送信。",
         "normal": "通常レンジ",
         "reading_positive": "強気", "reading_mixed": "中立", "reading_negative": "弱気",
-        "reading_note": "ℹ️ データが示す状況の説明であり、売買の推奨ではありません。▲ 強気 / ▼ 弱気 = 本日の多くの指標の傾き。",
+        "reading_note": "データが示す状況の説明であり、売買の推奨ではありません。▲ 強気 / ▼ 弱気 = 本日の多くの指標の傾き。",
         "english_note": "一部は英語のままです（AIモデルを設定すると翻訳されます）。",
     },
     "ko": {
+        "mood_up": "상승", "mood_down": "하락", "mood_flat": "보합", "mood_mixed": "혼조",
+        "sectors_gaining": "강세 전환 업종", "sectors_losing": "약세 전환 업종", "your_sectors": "보유 업종",
         "title": "MarketMyna 일일 리포트", "analysis": "{mode} 분석",
         "mode_quick": "빠른", "mode_standard": "표준", "mode_full": "전체", "mode_specialist": "전문가",
         "calls": "오늘의 판단", "buy": "매수", "hold": "보유", "sell": "매도", "incomplete": "미완료",
@@ -395,10 +444,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "투자 조언이 아닙니다. MarketMyna에서 발송.",
         "normal": "정상 범위",
         "reading_positive": "강세", "reading_mixed": "중립", "reading_negative": "약세",
-        "reading_note": "ℹ️ 데이터가 보여주는 내용을 설명한 것이며 매수·매도 권유가 아닙니다. ▲ 강세 / ▼ 약세 = 오늘 대부분 지표의 방향.",
+        "reading_note": "데이터가 보여주는 내용을 설명한 것이며 매수·매도 권유가 아닙니다. ▲ 강세 / ▼ 약세 = 오늘 대부분 지표의 방향.",
         "english_note": "일부 내용은 영어입니다 (AI 모델을 설정하면 번역됩니다).",
     },
     "es": {
+        "mood_up": "al alza", "mood_down": "a la baja", "mood_flat": "plano", "mood_mixed": "mixto",
+        "sectors_gaining": "Ganan fuerza", "sectors_losing": "Pierden fuerza", "your_sectors": "Tus sectores",
         "title": "Informe diario de MarketMyna", "analysis": "Análisis {mode}",
         "mode_quick": "rápido", "mode_standard": "estándar", "mode_full": "completo", "mode_specialist": "especialista",
         "calls": "Recomendaciones de hoy", "buy": "Comprar", "hold": "Mantener", "sell": "Vender", "incomplete": "Incompleto",
@@ -415,10 +466,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "No es asesoramiento de inversión. Enviado por MarketMyna.",
         "normal": "Rango normal",
         "reading_positive": "alcista", "reading_mixed": "neutral", "reading_negative": "bajista",
-        "reading_note": "ℹ️ Describe lo que muestran los datos; no es una recomendación de compra o venta. ▲ alcista / ▼ bajista = hacia dónde se inclinan hoy la mayoría de indicadores.",
+        "reading_note": "Describe lo que muestran los datos; no es una recomendación de compra o venta. ▲ alcista / ▼ bajista = hacia dónde se inclinan hoy la mayoría de indicadores.",
         "english_note": "Algunos detalles están en inglés (configura un modelo de IA para traducirlos).",
     },
     "fr": {
+        "mood_up": "en hausse", "mood_down": "en baisse", "mood_flat": "stable", "mood_mixed": "mitigé",
+        "sectors_gaining": "Se renforcent", "sectors_losing": "S'affaiblissent", "your_sectors": "Vos secteurs",
         "title": "Rapport quotidien MarketMyna", "analysis": "Analyse {mode}",
         "mode_quick": "rapide", "mode_standard": "standard", "mode_full": "complète", "mode_specialist": "spécialiste",
         "calls": "Recommandations du jour", "buy": "Acheter", "hold": "Conserver", "sell": "Vendre", "incomplete": "Incomplet",
@@ -435,10 +488,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "Ceci n'est pas un conseil en investissement. Envoyé par MarketMyna.",
         "normal": "Fourchette normale",
         "reading_positive": "haussier", "reading_mixed": "neutre", "reading_negative": "baissier",
-        "reading_note": "ℹ️ Ceci décrit ce que montrent les données, ce n'est pas une recommandation d'achat ou de vente. ▲ haussier / ▼ baissier = l'orientation de la plupart des indicateurs aujourd'hui.",
+        "reading_note": "Ceci décrit ce que montrent les données, ce n'est pas une recommandation d'achat ou de vente. ▲ haussier / ▼ baissier = l'orientation de la plupart des indicateurs aujourd'hui.",
         "english_note": "Certains détails sont en anglais (configurez un modèle d'IA pour les traduire).",
     },
     "de": {
+        "mood_up": "im Plus", "mood_down": "im Minus", "mood_flat": "seitwärts", "mood_mixed": "uneinheitlich",
+        "sectors_gaining": "Gewinnen an Stärke", "sectors_losing": "Verlieren an Stärke", "your_sectors": "Ihre Sektoren",
         "title": "MarketMyna Tagesbericht", "analysis": "{mode}-Analyse",
         "mode_quick": "Schnell", "mode_standard": "Standard", "mode_full": "Voll", "mode_specialist": "Spezialisten",
         "calls": "Heutige Empfehlungen", "buy": "Kaufen", "hold": "Halten", "sell": "Verkaufen", "incomplete": "Unvollständig",
@@ -455,10 +510,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "Keine Anlageberatung. Gesendet von MarketMyna.",
         "normal": "Normale Spanne",
         "reading_positive": "bullisch", "reading_mixed": "neutral", "reading_negative": "bärisch",
-        "reading_note": "ℹ️ Beschreibt, was die Daten zeigen – keine Kauf- oder Verkaufsempfehlung. ▲ bullisch / ▼ bärisch = wohin die meisten Indikatoren heute neigen.",
+        "reading_note": "Beschreibt, was die Daten zeigen – keine Kauf- oder Verkaufsempfehlung. ▲ bullisch / ▼ bärisch = wohin die meisten Indikatoren heute neigen.",
         "english_note": "Einige Details sind auf Englisch (richte ein KI-Modell zur Übersetzung ein).",
     },
     "pt": {
+        "mood_up": "em alta", "mood_down": "em queda", "mood_flat": "estável", "mood_mixed": "misto",
+        "sectors_gaining": "Ganham força", "sectors_losing": "Perdem força", "your_sectors": "Seus setores",
         "title": "Relatório diário MarketMyna", "analysis": "Análise {mode}",
         "mode_quick": "rápida", "mode_standard": "padrão", "mode_full": "completa", "mode_specialist": "especialista",
         "calls": "Recomendações de hoje", "buy": "Comprar", "hold": "Manter", "sell": "Vender", "incomplete": "Incompleto",
@@ -475,10 +532,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "Não é recomendação de investimento. Enviado pelo MarketMyna.",
         "normal": "Faixa normal",
         "reading_positive": "de alta", "reading_mixed": "neutro", "reading_negative": "de baixa",
-        "reading_note": "ℹ️ Descreve o que os dados mostram; não é recomendação de compra ou venda. ▲ de alta / ▼ de baixa = para onde a maioria dos indicadores aponta hoje.",
+        "reading_note": "Descreve o que os dados mostram; não é recomendação de compra ou venda. ▲ de alta / ▼ de baixa = para onde a maioria dos indicadores aponta hoje.",
         "english_note": "Alguns detalhes estão em inglês (configure um modelo de IA para traduzi-los).",
     },
     "ru": {
+        "mood_up": "рост", "mood_down": "снижение", "mood_flat": "без изменений", "mood_mixed": "разнонаправленно",
+        "sectors_gaining": "Набирают силу", "sectors_losing": "Теряют силу", "your_sectors": "Ваши секторы",
         "title": "Ежедневный отчёт MarketMyna", "analysis": "{mode} анализ",
         "mode_quick": "Быстрый", "mode_standard": "Стандартный", "mode_full": "Полный", "mode_specialist": "Экспертный",
         "calls": "Рекомендации на сегодня", "buy": "Покупать", "hold": "Держать", "sell": "Продавать",
@@ -496,10 +555,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "Не является инвестиционной рекомендацией. Отправлено MarketMyna.",
         "normal": "Обычный диапазон",
         "reading_positive": "бычий", "reading_mixed": "нейтральный", "reading_negative": "медвежий",
-        "reading_note": "ℹ️ Это описание того, что показывают данные, а не рекомендация покупать или продавать. ▲ бычий / ▼ медвежий = куда сегодня склоняется большинство индикаторов.",
+        "reading_note": "Это описание того, что показывают данные, а не рекомендация покупать или продавать. ▲ бычий / ▼ медвежий = куда сегодня склоняется большинство индикаторов.",
         "english_note": "Часть информации на английском (настройте модель ИИ для перевода).",
     },
     "ar": {
+        "mood_up": "صعود", "mood_down": "هبوط", "mood_flat": "مستقر", "mood_mixed": "متباين",
+        "sectors_gaining": "قطاعات تكتسب قوة", "sectors_losing": "قطاعات تفقد قوتها", "your_sectors": "قطاعاتك",
         "title": "تقرير MarketMyna اليومي", "analysis": "تحليل {mode}",
         "mode_quick": "سريع", "mode_standard": "قياسي", "mode_full": "كامل", "mode_specialist": "متخصص",
         "calls": "توصيات اليوم", "buy": "شراء", "hold": "احتفاظ", "sell": "بيع", "incomplete": "غير مكتمل",
@@ -516,10 +577,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "ليست نصيحة استثمارية. أرسلها MarketMyna.",
         "normal": "النطاق المعتاد",
         "reading_positive": "صاعد", "reading_mixed": "محايد", "reading_negative": "هابط",
-        "reading_note": "ℹ️ يصف هذا ما تُظهره البيانات، وليس توصية بالشراء أو البيع. ▲ صاعد / ▼ هابط = اتجاه معظم المؤشرات اليوم.",
+        "reading_note": "يصف هذا ما تُظهره البيانات، وليس توصية بالشراء أو البيع. ▲ صاعد / ▼ هابط = اتجاه معظم المؤشرات اليوم.",
         "english_note": "بعض التفاصيل بالإنجليزية (اضبط نموذج ذكاء اصطناعي لترجمتها).",
     },
     "id": {
+        "mood_up": "naik", "mood_down": "turun", "mood_flat": "datar", "mood_mixed": "campuran",
+        "sectors_gaining": "Menguat", "sectors_losing": "Melemah", "your_sectors": "Sektor Anda",
         "title": "Laporan harian MarketMyna", "analysis": "Analisis {mode}",
         "mode_quick": "cepat", "mode_standard": "standar", "mode_full": "lengkap", "mode_specialist": "spesialis",
         "calls": "Rekomendasi hari ini", "buy": "Beli", "hold": "Tahan", "sell": "Jual", "incomplete": "Belum lengkap",
@@ -536,7 +599,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "disclaimer": "Bukan saran investasi. Dikirim oleh MarketMyna.",
         "normal": "Rentang normal",
         "reading_positive": "bullish", "reading_mixed": "netral", "reading_negative": "bearish",
-        "reading_note": "ℹ️ Ini menjelaskan apa yang ditunjukkan data, bukan rekomendasi beli atau jual. ▲ bullish / ▼ bearish = arah kebanyakan indikator hari ini.",
+        "reading_note": "Ini menjelaskan apa yang ditunjukkan data, bukan rekomendasi beli atau jual. ▲ bullish / ▼ bearish = arah kebanyakan indikator hari ini.",
         "english_note": "Beberapa detail dalam bahasa Inggris (atur model AI untuk menerjemahkannya).",
     },
 }
@@ -659,9 +722,23 @@ def has_builtin(lang: str) -> bool:
     return lang in BUILTIN_LANGUAGES
 
 
+# Labels without a built-in translation yet (PENDING_TRANSLATION), translated
+# by the AI for one report build (marketmyna/services/report.py render_reports).
+_LABEL_OVERRIDES: "ContextVar[dict]" = ContextVar("marketmyna_report_labels", default={})
+
+
+@contextmanager
+def label_overrides(labels: dict):
+    token = _LABEL_OVERRIDES.set(labels)
+    try:
+        yield
+    finally:
+        _LABEL_OVERRIDES.reset(token)
+
+
 def t(lang: str, key: str, **kwargs) -> str:
     """Label in `lang`, falling back to English for AI-only languages."""
-    text = _STRINGS.get(lang, {}).get(key) or _EN[key]
+    text = _STRINGS.get(lang, {}).get(key) or _LABEL_OVERRIDES.get().get(key) or _EN[key]
     return text.format(**kwargs) if kwargs else text
 
 

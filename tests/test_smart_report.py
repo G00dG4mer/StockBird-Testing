@@ -20,6 +20,13 @@ from marketmyna.services.smart_report import (
     without_calls,
 )
 
+
+@pytest.fixture(autouse=True)
+def no_market_overview(monkeypatch):
+    """No network: the smart message's Market overview is tested on its own."""
+    monkeypatch.setattr("marketmyna.services.smart_report.market_block", lambda rows, prefs, config: None)
+
+
 NOW = datetime(2026, 9, 25, 16, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 
@@ -114,7 +121,8 @@ class TestMessage:
         title, body = smart_message(rows, prefs, "en", "https://sp.example/r/tok", NOW)
         assert "Top 3 stocks to watch today" in body
         assert "S0" in body and "S2" in body and "S3" not in body
-        assert "▲ S0" in body and "Indicators: bullish" in body and "Normal range ₹95.00" in body
+        assert "S0 ₹100.00" in body and "Why:" in body and "Normal range ₹95.00" in body
+        assert any(f"· {v}" in body for v in ("BULLISH", "NEUTRAL", "BEARISH"))
         assert "BUY" not in body and "Buy ≤" not in body and "Sell ≥" not in body
         assert "Full report for all 8 stocks: https://sp.example/r/tok" in body
         assert len(body.splitlines()) < 20
@@ -184,3 +192,17 @@ class TestReportsApi:
         detail = client.get(f"/api/v1/reports/{token}").json()
         assert detail["title"] == "My report" and detail["rows"][0]["symbol"] == "A"
         assert client.get("/api/v1/reports/nope").status_code == 404
+
+
+def test_market_overview_tops_the_smart_message():
+    prefs = ReportPrefs(sections=["market"], smart=True, smart_top_n=1)
+    market = {"overview": [{"market": "india", "name": "NIFTY 50", "change_percent": 0.8}],
+              "sectors": {"india": {"sectors": [("Healthcare", "leading"), ("Financials", "lagging")],
+                                    "yours": [("Healthcare", "leading", 1)]}},
+              "take": "Bullish day led by healthcare."}
+    _, body = smart_message([_row("A", 5)], prefs, "en", None, datetime(2026, 10, 26), market)
+    assert body.index("Market overview") < body.index(" A ₹")
+    assert "▲ India up · NIFTY 50 +0.80%" in body and "Your sectors: Healthcare ▲" in body
+    assert "AI: Bullish day led by healthcare." in body
+    _, plain = smart_message([_row("A", 5)], prefs, "en", None, datetime(2026, 10, 26))
+    assert "Market overview" not in plain

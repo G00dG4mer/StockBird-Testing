@@ -1,21 +1,24 @@
 """The report file Smart messaging sends with its short message.
 
-Not a copy of every section ticked for the message: the file always holds
-the same core set, the figures that matter for each stock, rendered as a
-PDF (to read) or an Excel workbook (to sort and filter):
+Only the sections ticked in the Scheduler go in (2026-10-27; Market overview
+stays in the message), each under a clear title, rendered as a PDF (to read)
+or an Excel workbook (to sort and filter):
 
   summary     tiles (stocks, bullish / neutral / bearish counts, best / worst today)
-  market      index levels and the AI's read of the day
-  readings    what the indicators show, bullish / neutral / bearish; never a
-              buy / sell call (marketmyna/core/compliance.py)
-  portfolio   value, today's change and total gain, when the schedule has one
-  stocks      price, day, reading, valuation vs sector and the AI summary
+  calls       Bullish / Neutral / Bearish from each company's fundamentals and
+              price trend (marketmyna/services/outlook.py); never a buy / hold /
+              sell call (marketmyna/core/compliance.py)
+  portfolio   value, today's change and total gain, then each mutual fund
+              held (and picked or watched) with its NAV and returns
+  stocks      price, day, view, valuation vs sector and the AI summary
   guide       how to read the report, term by term
   cards       one per stock: ranges, trend, RSI, risk, next results, the AI
               summary and valuation vs sector
 
-News, alerts and mutual funds stay in the message and the
-report link. Nothing here calls the AI except the one-paragraph market read.
+Every other ticked section goes in too (2026-10-27): alerts, hot for trading,
+trending for investors and new stock ideas as tables; fundamentals, analyst
+ratings and news on each stock's card. Only Market overview stays in the
+message. The core set above calls no AI; stock ideas do (marketmyna/services/ideas.py).
 """
 
 from __future__ import annotations
@@ -27,13 +30,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from ..core.compliance import outlook
 from ..core.numbers import finite as _num
 
 logger = logging.getLogger(__name__)
 
 WORKERS = 6
 # Per-stock data the file needs from collect_extras (marketmyna/services/analysis_run.py).
-FILE_EXTRAS = {"valuation", "events"}
+FILE_EXTRAS = {"valuation", "events"}  # fetched only when their section is ticked
+# Fetched too when the section is ticked: shown on each stock's card.
+CARD_EXTRAS = {"fundamentals", "analysts", "news"}
 FILE_TYPES = {"pdf": "pdf", "xlsx": "xlsx"}
 # Marks AI-reviewed stocks (plain text: the PDF font has no emoji).
 AI_TAG = " · AI"
@@ -88,6 +94,8 @@ class Document:
     cards: list[StockCard] = field(default_factory=list)
     # Shown in a box under the summary: what this report is and is not (general users).
     notice: str = ""
+    # Name in the title band: an Enterprise organization's (branded_exports), else MarketMyna.
+    brand: str = "MarketMyna"
 
 
 # ------------------------------------------------------------- formatting
@@ -118,7 +126,7 @@ def _word(value) -> str:
 
 # ------------------------------------------------------------- building
 
-def _extras(rows: list[dict]) -> dict:
+def _extras(rows: list[dict], wanted=FILE_EXTRAS) -> dict:
     """symbol -> collect_extras() for the file's per-stock data (parallel)."""
     from .analysis_run import collect_extras
 
@@ -126,13 +134,81 @@ def _extras(rows: list[dict]) -> dict:
 
     def one(r):
         try:
-            return r["symbol"], collect_extras(r["symbol"], r["market"], FILE_EXTRAS)
+            return r["symbol"], collect_extras(r["symbol"], r["market"], wanted)
         except Exception as exc:
             logger.warning("Extras for %s unavailable: %s", r["symbol"], exc)
             return r["symbol"], {}
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         return dict(pool.map(one, good))
+
+
+def _section_tables(rows: list[dict], prefs, config, sections: set) -> list[Table]:
+    """The report-wide sections ticked in the Scheduler, as tables: alerts,
+    hot for trading, trending for investors and stocks matching your screen. Each is
+    best effort; one that fails is left out."""
+    from . import analysis_run
+    from .report import CURRENCY_SYMBOLS, INVEST_TITLES, MARKET_NAMES, _invest_figures
+
+    results = _results_like(rows)
+    out: list[Table] = []
+    if "alerts" in sections:
+        try:
+            digest = analysis_run.alert_digest(results, config)
+            fired = [[e["symbol"], "Fired", e.get("message") or ""] for e in digest.get("fired", [])]
+            near = [[a["symbol"], "Close", f"{a['describe']} · {abs(a['distance_pct']):.1f}% away"]
+                    for a in digest.get("near", [])]
+            if fired or near:
+                out.append(Table("Your alerts", ["Stock", "Status", "Alert"], fired + near,
+                                 note=f"{digest.get('active', 0)} alerts active."))
+        except Exception as exc:
+            logger.warning("Alerts unavailable for the report file: %s", exc)
+    hot_sections = {"hot_trade", "hot_invest"} & sections
+    if hot_sections:
+        try:
+            blocks = analysis_run.hot_blocks(results, hot_sections,
+                                             invest_markets=getattr(prefs, "hot_invest_markets", None),
+                                             invest_detail="hot_invest" in hot_sections)
+            for block in blocks:
+                invest = block["section"] == "hot_invest"
+                table = Table("Trending for investors" if invest else "Hot for trading",
+                              ["Market", "List", "Stock", "Name", "Day", "Why"])
+                for market, boards in block["markets"].items():
+                    for b in boards:
+                        title = INVEST_TITLES.get(b["key"], (b["title"], ""))[0] if invest else b["title"]
+                        for row in b["rows"]:
+                            why = (_invest_figures(row) if invest and block.get("detail") else "") or row.get("why") or ""
+                            table.rows.append([MARKET_NAMES.get(market, market), title, row["symbol"],
+                                               row.get("name") or "", _pct(row.get("change_percent")), why])
+                if table.rows:
+                    table.note = "Screens of company and market figures, not recommendations." if invest else ""
+                    out.append(table)
+        except Exception as exc:
+            logger.warning("Hot stocks unavailable for the report file: %s", exc)
+    if "ideas" in sections:
+        try:
+            from .ideas import find_ideas
+
+            ideas = []
+            for market in getattr(prefs, "ideas_markets", None) or [prefs.ideas_market]:
+                ideas += find_ideas(market, prefs.ideas_categories, prefs.ideas_count,
+                                    exclude=[r["symbol"] for r in results], config=config, calls=False)
+            if ideas:
+                table = Table("Stocks matching your screen",
+                              ["Stock", "Name", "Market", "Price", "Day", "Figures", "Why", "Watch"],
+                              note="A screen of trend and company figures with an AI note, not a recommendation to buy.")
+                for i in ideas:
+                    price, hi, lo = (_num(i.get(k)) for k in ("price", "high_52w", "low_52w"))
+                    figures = _invest_figures({**(i.get("figures") or {}),
+                                               "from_high": (price / hi - 1) * 100 if price and hi else None,
+                                               "from_low": (price / lo - 1) * 100 if price and lo else None})
+                    table.rows.append([i["symbol"], i.get("name") or "", MARKET_NAMES.get(i["market"], i["market"]),
+                                       f"{CURRENCY_SYMBOLS.get(i['market'], '')}{_fmt(price)}",
+                                       _pct(i.get("change_percent")), figures, i.get("reason") or "", i.get("watch") or ""])
+                out.append(table)
+        except Exception as exc:
+            logger.warning("Stock ideas unavailable for the report file: %s", exc)
+    return out
 
 
 def _results_like(rows: list[dict]) -> list[dict]:
@@ -142,14 +218,22 @@ def _results_like(rows: list[dict]) -> list[dict]:
              "dashboard": {}} for r in rows if "error" not in r]
 
 
+def _fund_cells(f: Optional[dict], code: str) -> list:
+    f = f or {}
+    return [f.get("name") or code, _fmt(f.get("nav"), 4 if (_num(f.get("nav")) or 0) < 100 else 2),
+            _pct(f.get("change_percent")), _pct(f.get("return_1m")), _pct(f.get("return_1y"))]
+
+
 def _call(r: dict) -> str:
-    """The indicators' reading (bullish / neutral / bearish), never a call."""
+    """The Bullish / Neutral / Bearish view, never a call."""
     from .smart_report import reading_label
 
     return reading_label(r) + (AI_TAG if r.get("ai") else "")
 
 
 def _why(r: dict) -> str:
+    if "reading" in r and r.get("why"):  # a general user: the figures behind the view
+        return r["why"]
     return r.get("ai_summary") or ", ".join(r.get("reasons") or [])
 
 
@@ -168,23 +252,37 @@ def _valuation(r: dict, ex: dict) -> str:
     return f"P/E {pe:.1f}; no sector median to compare" if pe else ""
 
 
-def _stock_table(rows: list[dict], extras: dict) -> Table:
+# Per-stock sections, in the order their figures appear on a stock's card.
+STOCK_SECTIONS = ("calls", "price", "levels", "technical", "indicators", "risk", "fundamentals", "valuation",
+                  "analysts", "events", "ai", "news")
+
+
+def _stock_table(rows: list[dict], extras: dict, sections: set) -> Optional[Table]:
+    """One row per stock with the ticked headline figures only."""
     from .report import CURRENCY_SYMBOLS, MARKET_NAMES
 
+    view, price, value = "calls" in sections, "price" in sections, "valuation" in sections
+    why = view or "ai" in sections
+    if not (view or price or value or why):
+        return None
     multi = len({r["market"] for r in rows}) > 1
-    cols = (["Stock", "Name"] + (["Market"] if multi else []) + ["Indicators", "Price", "Day",
-            "Valuation vs sector", "What stands out"])
-    table = Table("Stocks at a glance", cols, note=(
-        "Indicators: how trend, momentum, the price's place in its range and valuation lean today. Marked AI: "
-        "an AI summary of the figures; otherwise what the data flags. A description, not a recommendation."))
+    cols = (["Stock", "Name"] + (["Market"] if multi else []) + (["View"] if view else [])
+            + (["Price", "Day"] if price else []) + (["Valuation vs sector"] if value else []) + (["Why"] if why else []))
+    note = ""
+    if view:
+        note = ("View: Bullish, Neutral or Bearish from the company's figures and price trend; Why lists them. "
+                "A description of the data, not a recommendation.")
+    table = Table("Stocks at a glance", cols, note=note)
     for r in rows:
         if "error" in r:
             table.rows.append([r["symbol"], f"no data: {str(r['error'])[:60]}"] + [""] * (len(cols) - 2))
             continue
         cur = CURRENCY_SYMBOLS.get(r["market"], "")
         table.rows.append([r["symbol"], r.get("name") or ""] + ([MARKET_NAMES.get(r["market"], r["market"])] if multi else [])
-                          + [_call(r), f"{cur}{_fmt(r.get('price'))}", _pct(r.get("change_percent")),
-                             _valuation(r, extras.get(r["symbol"]) or {}), _why(r)])
+                          + ([_call(r)] if view else [])
+                          + ([f"{cur}{_fmt(r.get('price'))}", _pct(r.get("change_percent"))] if price else [])
+                          + ([_valuation(r, extras.get(r["symbol"]) or {})] if value else [])
+                          + ([_why(r) if view else (r.get("ai_summary") or "")] if why else []))
     return table
 
 
@@ -209,11 +307,12 @@ def _range_position(r: dict) -> str:
     low, high, price = _num(r.get("low_52w")), _num(r.get("high_52w")), _num(r.get("price"))
     if None in (low, high, price) or high <= low:
         return ""
-    return f"{(price - low) / (high - low) * 100:.0f}% of range"
+    return f"{(price - low) / (high - low) * 100:.0f}% up from low"
 
 
-def _card(r: dict, ex: dict) -> StockCard:
-    """The important figures for one stock, the same for every report."""
+def _card(r: dict, ex: dict, sections: set) -> Optional[StockCard]:
+    """One stock's figures, for the ticked sections only; None when none of
+    them has anything for this stock."""
     from .report import CURRENCY_SYMBOLS
 
     cur = CURRENCY_SYMBOLS.get(r["market"], "")
@@ -223,44 +322,74 @@ def _card(r: dict, ex: dict) -> StockCard:
         if value not in (None, "", "–", " ()"):
             facts.append((label, str(value)))
 
-    add("Normal range", f"{_fmt(r.get('normal_low'))}–{_fmt(r.get('normal_high'))}")
-    add("Position in normal range", _band_position(r))
-    add("Expected 1-week range", f"{_fmt(r.get('week_low'))}–{_fmt(r.get('week_high'))}")
-    add("52-week low", _fmt(r.get("low_52w")))
-    add("52-week high", _fmt(r.get("high_52w")))
-    add("In 52-week range", _range_position(r))
-    add("Trend", _word(r.get("trend")))
-    add("RSI (14)", _rsi_word(r.get("rsi")))
-    add("P/E", _fmt(r.get("pe"), 1))
-    add("Volatility (yearly)", _ratio_pct(r.get("volatility")))
-    add("Max drawdown", _ratio_pct(r.get("max_drawdown")))
-    add("Average daily move (ATR)", _fmt(r.get("atr")))
+    def money(value) -> str:
+        return f"{cur}{_fmt(value)}" if _fmt(value) else ""
+
+    if "price" in sections:
+        add("52-week range", f"{money(r.get('low_52w'))} – {money(r.get('high_52w'))}"
+            if _fmt(r.get("low_52w")) and _fmt(r.get("high_52w")) else "")
+        add("Where it sits", _range_position(r))
+    if "levels" in sections:
+        add("Normal range", f"{money(r.get('normal_low'))} – {money(r.get('normal_high'))}"
+            if _fmt(r.get("normal_low")) else "")
+        add("Expected 1-week range", f"{money(r.get('week_low'))} – {money(r.get('week_high'))}"
+            if _fmt(r.get("week_low")) else "")
+        add("Average daily move", money(r.get("atr")))
+    if "technical" in sections or "indicators" in sections:
+        add("Trend", _word(r.get("trend")))
+        add("RSI (14)", _rsi_word(r.get("rsi")))
+    if "indicators" in sections:
+        add("Position in normal range", _band_position(r))
+    if "risk" in sections:
+        add("Yearly swing", _ratio_pct(r.get("volatility")))
+        add("Worst fall from a high", _ratio_pct(abs(_num(r.get("max_drawdown")) or 0) or None))
+    fund = ex.get("fundamentals") or {}
+    if "fundamentals" in sections and fund:
+        score = fund.get("quality_score", fund.get("overall_score"))
+        add("Quality score", f"{score}/100" if score is not None else "")
+        add("P/E", _fmt(r.get("pe"), 1))
+        add("ROE", _pct(((fund.get("profitability") or {}).get("roe") or {}).get("value"), signed=False))
+        add("Revenue growth", _pct(((fund.get("growth") or {}).get("revenue_growth") or {}).get("value")))
+        add("Financial health", _word((fund.get("financial_health") or {}).get("rating")))
+        add("Dividend yield", _pct((fund.get("dividend") or {}).get("yield"), signed=False))
+    an = ex.get("analysts") or {}
+    if "analysts" in sections and an.get("recommendation"):
+        # Short values: a card cell holds about 25 characters.
+        # A direction (bullish / neutral / bearish), without the brokers' price target.
+        add("Broker consensus", _word(outlook(an["recommendation"]) or an["recommendation"])
+            + (f" · {an['count']} analysts" if an.get("count") else ""))
     ev = ex.get("events") or {}
-    add("Next results", str(ev.get("earnings_date") or "")[:10])
-    add("Ex-dividend", str(ev.get("ex_dividend_date") or "")[:10])
+    if "events" in sections:
+        add("Next results", str(ev.get("earnings_date") or "")[:10])
+        add("Ex-dividend", str(ev.get("ex_dividend_date") or "")[:10])
 
     summary = []
-    if _why(r):
-        label = "AI summary of the figures" if r.get("ai") else "What stands out"
-        summary.append((label, _why(r), "accent"))
-    if _valuation(r, ex):
+    if "calls" in sections and r.get("why"):
+        summary.append(("Why " + _call(r).split(" ", 1)[-1].replace(AI_TAG, "").strip().lower(), r["why"], "accent"))
+    if "ai" in sections and r.get("ai") and r.get("ai_summary"):
+        summary.append(("AI summary", r["ai_summary"], "accent"))
+    if "valuation" in sections and _valuation(r, ex):
         summary.append(("Valuation vs sector", _valuation(r, ex), "accent"))
     notes: list = [summary] if summary else []
-    return StockCard(symbol=r["symbol"], name=r.get("name") or "", call=_call(r),
+    news = [f"{n.get('title')}" + (f" — {n['source']}" if n.get("source") else "")
+            for n in (ex.get("news") or [])[:3] if n.get("title")] if "news" in sections else []
+    if not (facts or notes or news):
+        return None
+    return StockCard(symbol=r["symbol"], name=r.get("name") or "", call=_call(r) if "calls" in sections else "",
                      price=f"{cur}{_fmt(r.get('price'))}", change=_pct(r.get("change_percent")),
-                     facts=facts, notes=notes)
+                     facts=facts, notes=notes, news=news)
 
 
-def _highlights(rows: list[dict], good: list[dict]) -> list[Tile]:
+def _highlights(rows: list[dict], good: list[dict], sections: set) -> list[Tile]:
     ai = sum(1 for r in good if r.get("ai"))
-    tiles = [Tile("Stocks", str(len(rows)), f"{ai} reviewed by the AI" if ai else "computed readings", "accent")]
-    if good:
-        counts = {k: sum(1 for r in good if r.get("reading") == k) for k in ("positive", "mixed", "negative")}
-        tiles += [Tile("Bullish", str(counts["positive"]), "indicators lean up", "up"),
-                  Tile("Neutral", str(counts["mixed"]), "indicators split", "warn"),
-                  Tile("Bearish", str(counts["negative"]), "indicators lean down", "down")]
+    tiles = [Tile("Stocks", str(len(rows)), f"{ai} reviewed by the AI" if ai else "in this report", "accent")]
+    if good and "calls" in sections:
+        counts = {k: sum(1 for r in good if r.get("reading") == k) for k in ("bullish", "neutral", "bearish")}
+        tiles += [Tile("Bullish", str(counts["bullish"]), "figures lean up", "up"),
+                  Tile("Neutral", str(counts["neutral"]), "figures split", "warn"),
+                  Tile("Bearish", str(counts["bearish"]), "figures lean down", "down")]
     moves = [r for r in good if _num(r.get("change_percent")) is not None]
-    if moves:
+    if moves and "price" in sections:
         best = max(moves, key=lambda r: r["change_percent"])
         worst = min(moves, key=lambda r: r["change_percent"])
         tiles.append(Tile("Best today", _pct(best["change_percent"]), best["symbol"], "up" if best["change_percent"] >= 0 else "down"))
@@ -268,84 +397,99 @@ def _highlights(rows: list[dict], good: list[dict]) -> list[Tile]:
     return tiles
 
 
-def _guide() -> Table:
-    """"How to read this report": every term the file uses, in plain words."""
-    terms = [
-        ("Indicators", "▲ Bullish, ◆ Neutral or ▼ Bearish: how most of trend, momentum (RSI), "
-                       "the price's place in its normal range and valuation lean today. It describes the data "
-                       "and is not a recommendation to buy, sell or hold."),
-        ("Valuation vs sector", "How the stock's P/E, P/B and P/S compare with the median of its sector among "
-                                "the market's largest companies. A lower or higher price than peers can have "
-                                "good reasons; it is a comparison, not a verdict."),
-    ]
-    terms += [
-        ("Normal range", "Where the price usually trades: the 20-day Bollinger band. Outside it means an unusually "
-                         "large move for recent weeks."),
-        ("1-week range", "Where about 2 of 3 weeks end, from recent volatility. Not a forecast or a target."),
-        ("52-week range", "The lowest and highest price of the past year; 0% of range = at the low, 100% = at the high."),
-        ("Trend", "Uptrend: price above its 50- and 200-day averages; downtrend: below both; sideways: neither."),
-        ("RSI", "Momentum from 0 to 100. Above 70 the price rose fast recently, below 30 it fell fast."),
-        ("Volatility", "How much the price swings in a year; 25% means a typical yearly move of about a quarter of "
-                       "the price."),
-        ("Max drawdown", "The deepest fall from a high during the past year."),
-        ("AI summary of the figures", "Written by an AI model from the figures above. It can be wrong."),
-    ]
+def _guide(sections: set) -> Optional[Table]:
+    """"How to read this report": the terms of the ticked sections only, in plain words."""
+    terms: list[tuple[str, str]] = []
+    if "calls" in sections:
+        terms += [("View", "▲ Bullish, ◆ Neutral or ▼ Bearish. Each figure counts +1 or -1: return on equity, profit "
+                           "and sales growth, net margin, debt, P/E against its sector median and the price trend. "
+                           "A net +2 reads Bullish, -2 Bearish, anything between Neutral. It describes the data and "
+                           "is not a recommendation."),
+                  ("Why", "The figures behind the view, strongest first, and the main one pointing the other way.")]
+    if "price" in sections:
+        terms.append(("52-week range", "The year's lowest and highest price, and where today's price sits between them."))
+    if "levels" in sections:
+        terms += [("Normal range", "Where the price usually trades (the 20-day band)."),
+                  ("Expected 1-week range", "Where about 2 of 3 weeks end, from recent swings. Not a target.")]
+    if "technical" in sections or "indicators" in sections:
+        terms += [("Trend", "Uptrend: price above its 50- and 200-day averages; downtrend: below both; else sideways."),
+                  ("RSI", "Momentum from 0 to 100: above 70 a fast rise, below 30 a fast fall.")]
+    if "risk" in sections:
+        terms += [("Yearly swing", "How much the price typically moves in a year (volatility)."),
+                  ("Worst fall from a high", "The deepest drop from a peak in the past year (max drawdown).")]
+    if "fundamentals" in sections:
+        terms.append(("Quality score", "Profitability, financial health and growth, 0 to 100."))
+    if "valuation" in sections:
+        terms.append(("Valuation vs sector", "P/E, P/B and P/S against the median of the sector's largest companies; "
+                                             "a comparison, not a verdict."))
+    if "ai" in sections:
+        terms.append(("AI summary", "Written by an AI model from the figures. It can be wrong."))
+    if not terms:
+        return None
     return Table("How to read this report", ["Term", "What it means"], [list(t) for t in terms])
 
 
 def build_document(rows: list[dict], prefs, config, now: datetime, title: str) -> Document:
-    """The report file: the same core set every time (see the module doc)."""
+    """The report file: the ticked sections only, each clearly titled (see the module doc)."""
     from .smart_report import READING_LABELS, READING_NOTE, reading_label
 
     good = [r for r in rows if "error" not in r]
+    sections = set(getattr(prefs, "sections", None) or [])
     ai_count = sum(1 for r in good if r.get("ai"))
     doc = Document(title, f"{now:%d %b %Y, %H:%M %Z}".strip() + f" · {len(rows)} stocks"
                           + (f" · {ai_count} reviewed by the AI" if ai_count else ""),
-                   notice=READING_NOTE)
+                   notice="" if not sections & {"calls", "ai", "ideas", "hot_invest"} else READING_NOTE)
+
     results = _results_like(rows)
 
-    try:
-        from .analysis_run import market_overview
-        from .report import market_review
-
-        overview = market_overview(r["market"] for r in good)
-        if overview:
-            take = market_review(overview, results, config)
-            doc.blocks.append(Table("Market overview", ["Index", "Level", "Day"],
-                                    [[i["name"], _fmt(i.get("price")), _pct(i.get("change_percent"))]
-                                     for i in overview], note=take or ""))
-    except Exception as exc:
-        logger.warning("Market overview unavailable for the report file: %s", exc)
-
-    if good:
+    if good and "calls" in sections:
         groups = {k: [r["symbol"] + (AI_TAG if r.get("ai") else "") for r in good if r.get("reading") == k]
                   for k in READING_LABELS}
-        doc.blocks.append(Table("What the indicators show", ["Indicators", "Stocks", "Count"],
+        doc.blocks.append(Table("Bullish / Neutral / Bearish", ["View", "Stocks", "Count"],
                                 [[reading_label({"reading": k}), ", ".join(v) or "—", len(v)] for k, v in groups.items()],
-                                note="Grouped by how most indicators (trend, momentum, place in the range, valuation) "
-                                     "lean today. This sorts the data; it does not say what to do."))
+                                note="Grouped by what each company's fundamentals and price trend show today; see "
+                                     "Why for each stock. This sorts the data; it does not say what to do."))
 
-    if getattr(prefs, "portfolios", None):
+    if config is not None and "portfolio" in sections:
         try:
-            from .analysis_run import portfolio_snapshots
+            from .analysis_run import fund_cache, portfolio_snapshots
 
-            ports = portfolio_snapshots(prefs.portfolios, results, config)
+            nav = fund_cache()
+            ports = portfolio_snapshots(prefs.portfolios, results, config, fund=nav)
             if ports:
                 doc.blocks.append(Table("Your portfolio", ["Portfolio", "Value", "Today", "Today %", "Total gain", "Gain %", "Moved most"], [
                     [p["name"], f"{p.get('currency_symbol', '')}{_fmt(p.get('value'), 0)}", _fmt(p.get("day_change"), 0),
                      _pct(p.get("day_change_pct")), _fmt(p.get("gain"), 0), _pct(p.get("gain_pct")),
                      ", ".join(f"{m['symbol']} {_pct(m.get('change_pct'))}" for m in p.get("movers", []))]
                     for p in ports]))
+            fund_rows, held = [], set()
+            for p in ports:
+                for code in p.get("fund_codes", []):
+                    held.add(code)
+                    fund_rows.append([p["name"], *_fund_cells(nav(code), code)])
+            for code in dict.fromkeys(str(c) for c in getattr(prefs, "funds", None) or []):
+                if code not in held:
+                    fund_rows.append(["Watching", *_fund_cells(nav(code), code)])
+            if fund_rows:
+                doc.blocks.append(Table("Your mutual funds", ["Portfolio", "Fund", "NAV", "Day", "1M", "1Y"], fund_rows,
+                                        note="Funds held in each portfolio, then the ones you picked or watch."))
         except Exception as exc:
             logger.warning("Portfolio unavailable for the report file: %s", exc)
 
-    extras = _extras(rows)
-    doc.blocks.append(_stock_table(rows, extras))
+    if config is not None and good:
+        doc.blocks += _section_tables(rows, prefs, config, sections)
 
-    if good:
-        doc.blocks.append(_guide())
-    doc.cards = [_card(r, extras.get(r["symbol"]) or {}) for r in good]
-    doc.highlights = _highlights(rows, good)
+    wanted = (FILE_EXTRAS & sections) | (CARD_EXTRAS & sections)
+    extras = _extras(rows, wanted) if wanted else {}
+    table = _stock_table(rows, extras, sections)
+    if table:
+        doc.blocks.append(table)
+
+    guide = _guide(sections) if good else None
+    if guide:
+        doc.blocks.append(guide)
+    doc.cards = [c for c in (_card(r, extras.get(r["symbol"]) or {}, sections) for r in good) if c]
+    doc.highlights = _highlights(rows, good, sections)
     return doc
 
 

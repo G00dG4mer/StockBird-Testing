@@ -14,15 +14,20 @@ from marketmyna.api.deps import get_config_dep, get_scheduler_service
 from marketmyna.core.compliance import mode as compliance_mode
 from marketmyna.llm.channels import llm_configured
 from marketmyna.notifiers.dispatcher import NotificationDispatcher
+from marketmyna.data.categories import CATEGORIES
 from marketmyna.services import schedule_time
-from marketmyna.services.report import DEFAULT_SECTIONS, SECTION_AREAS, SECTIONS, clean_sections
+from marketmyna.services.report import DEFAULT_SECTIONS, SECTION_AREAS, SMART_AI_TOP, clean_sections, section_catalog
 from marketmyna.services.report_i18n import BUILTIN_LANGUAGES, LANGUAGES
 from marketmyna.services.schedule_config import (
+    HOT_INVEST_MARKETS,
+    IDEAS_MARKETS,
     SMART_FILE_CHANNELS,
     SMART_FILES,
     SOURCES,
     ScheduleConfig,
     ScheduleConfigStore,
+    hot_invest_markets,
+    ideas_market,
     resolve_targets,
     source_catalog,
 )
@@ -42,6 +47,11 @@ class ScheduleConfigUpdate(BaseModel):
     stock_sections: Optional[Dict[str, List[str]]] = None
     channel_languages: Optional[Dict[str, str]] = None
     mf_codes: Optional[List[str]] = None
+    ideas_market: Optional[str] = None
+    ideas_markets: Optional[List[str]] = None
+    ideas_categories: Optional[List[str]] = None
+    ideas_count: Optional[int] = None
+    hot_invest_markets: Optional[List[str]] = None
     smart_enabled: Optional[bool] = None
     smart_top_n: Optional[int] = None
     smart_ai_top: Optional[int] = None
@@ -52,6 +62,28 @@ class ScheduleConfigUpdate(BaseModel):
     sources: Optional[List[str]] = None
     watchlist_ids: Optional[List[int]] = None
     portfolio_names: Optional[List[str]] = None
+
+
+def _ideas_market(cfg: ScheduleConfig, config) -> str:
+    """The market the ideas scan will use (picked, or from the run's stocks)."""
+    try:
+        return ideas_market(cfg, resolve_targets(cfg, config))
+    except Exception:
+        return ideas_market(cfg, [])
+
+
+def _hot_invest(cfg: ScheduleConfig, config) -> dict[str, Any]:
+    """Trending for investors: what is saved and what a run will scan (any number of markets)."""
+    try:
+        targets = resolve_targets(cfg, config)
+    except Exception:
+        targets = []
+    return {
+        "hot_invest_markets": list(cfg.hot_invest_markets or []),
+        "hot_invest_scan": hot_invest_markets(cfg, targets),
+        "hot_invest_limit": None,
+        "hot_invest_locked": False,
+    }
 
 
 def _to_dict(cfg: ScheduleConfig, config=None) -> dict[str, Any]:
@@ -70,9 +102,14 @@ def _to_dict(cfg: ScheduleConfig, config=None) -> dict[str, Any]:
         "stock_sections": cfg.stock_sections or {},
         "channel_languages": cfg.channel_languages or {},
         "mf_codes": cfg.mf_codes or [],
+        "ideas_market": _ideas_market(cfg, config),
+        "ideas_markets": [m for m in cfg.ideas_markets or [] if m in IDEAS_MARKETS],
+        "ideas_categories": cfg.ideas_categories or [],
+        "ideas_count": cfg.ideas_count or 3,
+        **_hot_invest(cfg, config),
         "smart_enabled": bool(cfg.smart_enabled),
         "smart_top_n": cfg.smart_top_n or 5,
-        "smart_ai_top": cfg.smart_ai_top if cfg.smart_ai_top is not None else 10,
+        "smart_ai_top": cfg.smart_ai_top if cfg.smart_ai_top is not None else SMART_AI_TOP,
         "smart_email_full": cfg.smart_email_full if cfg.smart_email_full is not None else True,
         "smart_file": cfg.smart_file if cfg.smart_file in SMART_FILES else "pdf",
         "smart_file_channels": list(cfg.smart_file_channels if cfg.smart_file_channels is not None
@@ -140,6 +177,18 @@ def update_schedule_config(body: ScheduleConfigUpdate, request: Request, config=
         overrides["channel_languages"] = {ch: lang for ch, lang in overrides["channel_languages"].items() if lang}
     if overrides.get("mf_codes") is not None:
         overrides["mf_codes"] = [c.strip() for c in overrides["mf_codes"] if c.strip().isdigit()]
+    if overrides.get("ideas_count") is not None:
+        overrides["ideas_count"] = max(1, min(10, overrides["ideas_count"]))
+    if overrides.get("ideas_categories") is not None:
+        overrides["ideas_categories"] = [c for c in overrides["ideas_categories"] if c in CATEGORIES]
+    if overrides.get("ideas_markets") is not None:
+        # Several markets; the older single ideas_market follows the first, or automatic when none.
+        overrides["ideas_markets"] = [m for m in IDEAS_MARKETS if m in overrides["ideas_markets"]]
+        overrides["ideas_market"] = overrides["ideas_markets"][0] if overrides["ideas_markets"] else None
+    elif overrides.get("ideas_market"):
+        overrides["ideas_markets"] = [overrides["ideas_market"]] if overrides["ideas_market"] in IDEAS_MARKETS else []
+    if overrides.get("hot_invest_markets") is not None:
+        overrides["hot_invest_markets"] = [m for m in HOT_INVEST_MARKETS if m in overrides["hot_invest_markets"]]
     if overrides.get("smart_top_n") is not None:
         overrides["smart_top_n"] = max(1, min(20, overrides["smart_top_n"]))
     if overrides.get("smart_ai_top") is not None:
@@ -210,9 +259,10 @@ def report_options(config=Depends(get_config_dep)) -> dict:
             {"id": sid, "label": label, "description": desc, "default": default,
              # "trader" / "investor": shown only in that area of the app (None = both)
              "area": SECTION_AREAS.get(sid)}
-            for sid, label, desc, default in SECTIONS
+            for sid, label, desc, default in section_catalog()
         ],
         "channels": dispatcher.configured_channels("report"),
+        "categories": [c for c in CATEGORIES if c != "Other"],
         "llm_configured": llm_configured(config),
         # Always "analytics": no calls; Smart messaging shows readings
         "compliance": compliance_mode(),

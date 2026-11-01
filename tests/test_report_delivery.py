@@ -16,24 +16,24 @@ NOW = datetime(2026, 9, 25, 8, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 # A marker that appears in the message only when its section is on.
 MARKERS = {
-    "market": "🌐 Market overview",
-    "calls": "🧭 AI outlook",
-    "portfolio": "💼 Core: ₹",
-    "alerts": "🔔 Your alerts",
-    "hot_trade": "🔥 Hot for trading",
-    "hot_invest": "🔥 Trending for investors",
-    "levels": "🎚️ Normal range ₹1,170.00",
-    "funds": "💼 Mutual funds",
-    "price": "💰 Price ₹1,219.40",
-    "ai": "🤖 AI summary: Uptrend intact",
-    "technical": "📈 Technical readings: RSI 41.20",
-    "indicators": "📐 Indicators: RSI 41.20",
-    "fundamentals": "🏦 Fundamentals: Score 62/100",
-    "risk": "⚖️ Risk: medium · Volatility 21% · Max drawdown -26%",
-    "analysts": "🎯 Broker consensus of third-party analysts: bullish",
-    "events": "📅 Upcoming: Earnings 16 Oct 2999",
-    "news": "📰 News",
-    "valuation": "⚖️ Valuation vs sector: P/E 21.1 vs 8.6",
+    "market": "Market overview",
+    "calls": "Bullish / Neutral / Bearish",
+    "portfolio": "Core: ₹",
+    "alerts": "Your alerts",
+    "hot_trade": "Hot for trading",
+    "hot_invest": "Trending for investors",
+    "levels": "Normal range ₹1,170.00",
+    "ideas": "Stocks matching your screen (India)",
+    "price": "Price ₹1,219.40",
+    "ai": "AI summary: Uptrend intact",
+    "technical": "Technical: RSI 41.20",
+    "indicators": "Indicators: RSI 41.20",
+    "fundamentals": "Fundamentals: Score 62/100",
+    "risk": "Risk: Medium · swings ~21% a year · fell up to 26% from a high",
+    "analysts": "Broker consensus of third-party analysts: bullish",
+    "events": "Upcoming: Earnings 16 Oct 2999",
+    "news": "News: Positive coverage",
+    "valuation": "Valuation vs sector: P/E 21.1 vs 8.6",
 }
 
 
@@ -72,7 +72,8 @@ def _build(sections):
     return build_report(
         [_full_result()], prefs, now=NOW,
         overview=[{"name": "NIFTY 50", "price": 22400, "change_percent": -0.9}],
-        funds=[{"name": "HDFC Mid Cap", "nav": 220.58, "change_percent": -0.35, "return_1m": -7.1, "return_1y": 4.2}],
+        funds=[{"code": "118989", "name": "HDFC Mid Cap", "nav": 220.58, "change_percent": -0.35, "return_1m": -7.1, "return_1y": 4.2}],
+        ideas=[{"symbol": "COFORGE", "market": "india", "price": 1749.1, "reason": "uptrend"}],
         portfolios=[{"name": "Core", "value": 250000, "currency_symbol": "₹", "day_change": 1200, "day_change_pct": 0.48,
                      "gain": 30000, "gain_pct": 13.6, "movers": [{"symbol": "RELIANCE", "change": 600, "change_pct": 0.5}]}],
         alerts={"fired": [{"symbol": "TCS", "message": "TCS rose to 3,500"}], "near": [], "active": 3},
@@ -96,7 +97,8 @@ def test_all_sections_together_and_none():
     assert all(m in everything for m in MARKERS.values())
     nothing = _build([])
     assert not any(m in nothing for m in MARKERS.values())
-    assert "RELIANCE" in nothing and "Not investment advice" in nothing
+    # no per-stock section ticked: no stock block, just the header and disclaimer
+    assert "RELIANCE" not in nothing and "Not investment advice" in nothing
 
 
 def test_extras_fetched_only_for_checked_sections(monkeypatch):
@@ -150,7 +152,7 @@ def test_routed_channels_each_get_the_report(monkeypatch):
     d = _Dispatcher(["telegram", "email"])
     _, delivery = _deliver(d, monkeypatch)
     assert set(d.sent) == {"telegram", "email"} and delivery == {"telegram": True, "email": True}
-    assert "🧭 " in d.sent["email"][1]
+    assert "" in d.sent["email"][1]
 
 
 def test_no_routed_channel_sends_nothing(monkeypatch):
@@ -243,3 +245,65 @@ def test_fund_holdings_go_to_funds_section_not_analysis():
     cfg = ScheduleConfig(sources=["portfolio", "watchlist"], mf_codes=["100"])
     assert [(t.symbol, t.market) for t in resolve_targets(cfg, catalog=catalog)] == [("RELIANCE", "india"), ("AAPL", "us")]
     assert resolve_funds(cfg, catalog=catalog) == ["100", "118989", "120716"]
+
+
+def test_funds_sit_under_the_portfolio_that_holds_them():
+    """Mutual funds merged into Your portfolio (2026-10-27): held funds under
+    their portfolio, picked / watched ones under "Funds you watch"."""
+    funds = [{"code": "118989", "name": "HDFC Mid Cap", "nav": 220.58, "change_percent": -0.35, "return_1y": 4.2},
+             {"code": "120716", "name": "UTI Nifty 50", "nav": 160.1, "change_percent": 0.2}]
+    ports = [{"name": "Family MF", "value": 50000, "currency_symbol": "₹", "gain": 5000, "gain_pct": 11.1,
+              "movers": [{"symbol": "118989", "name": "HDFC Mid Cap", "change": -120, "change_pct": -0.35}],
+              "fund_codes": ["118989"]}]
+    body = build_report([], ReportPrefs(sections=["portfolio"]), now=NOW, funds=funds, portfolios=ports)[1]
+    head, watched = body.split("Funds you watch (not owned)")
+    assert "Family MF: ₹50,000" in head and "▼ HDFC Mid Cap -0.35%" in head
+    assert "• HDFC Mid Cap" in head and "1Y +4.20%" in head and "UTI Nifty 50" not in head
+    assert "• UTI Nifty 50" in watched and "HDFC Mid Cap" not in watched
+    assert "Mutual funds" not in body
+
+
+def test_old_funds_tick_becomes_portfolio():
+    from marketmyna.services.report import clean_sections
+
+    assert clean_sections(["funds", "market"]) == ["market", "portfolio"]
+    assert "funds" not in SECTION_IDS
+
+
+def test_portfolio_snapshot_prices_funds_from_their_nav(monkeypatch):
+    from marketmyna.services import analysis_run
+
+    class Rec:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    class Q:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def order_by(self, *_):
+            return self
+
+        def filter(self, *_):
+            return self
+
+        def __iter__(self):
+            return iter(self.rows)
+
+    class Session:
+        def query(self, model):
+            if model.__name__ == "PortfolioRecord":
+                return Q([Rec(id=1, name="MF")])
+            return Q([Rec(symbol="118989", market="mf", quantity=100, avg_cost=200, current_price=0)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr("marketmyna.storage.DatabaseManager.instance", lambda *_: SimpleNamespace(get_session=Session))
+    fund = lambda code: {"code": code, "name": "HDFC Mid Cap", "nav": 220.0, "change_percent": 10.0}
+    (p,) = analysis_run.portfolio_snapshots([], [], fund=fund)
+    assert p["fund_codes"] == ["118989"] and p["value"] == 22000
+    assert round(p["day_change"]) == 2000 and p["movers"][0]["name"] == "HDFC Mid Cap"

@@ -4,11 +4,14 @@ pattern as PortfolioManager."""
 
 from __future__ import annotations
 
+from collections import Counter
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from ..storage import DatabaseManager, ScheduleConfigRecord, get_db_url
+from ..storage import DatabaseManager, ScheduleConfigRecord
+from .report import SMART_AI_TOP
 
 
 @dataclass
@@ -30,10 +33,17 @@ class ScheduleConfig:
     stock_sections: dict[str, list[str]] = field(default_factory=dict)
     channel_languages: dict[str, str] = field(default_factory=dict)
     mf_codes: list[str] = field(default_factory=list)
+    # "New ideas" section: where to look and how many to suggest
+    ideas_market: Optional[str] = None  # None = the schedule's market
+    ideas_markets: list[str] = field(default_factory=list)  # several; empty = ideas_market
+    ideas_categories: list[str] = field(default_factory=list)  # empty = any category
+    ideas_count: int = 3
+    # "Trending for investors": markets to scan (empty = the run's stock markets)
+    hot_invest_markets: list[str] = field(default_factory=list)
     # Smart messaging (marketmyna/services/smart_report.py)
     smart_enabled: bool = False
     smart_top_n: int = 5
-    smart_ai_top: int = 10
+    smart_ai_top: int = SMART_AI_TOP
     smart_email_full: bool = True
     smart_file: str = "pdf"  # "pdf" | "xlsx" | "none"
     smart_file_channels: Optional[list[str]] = None  # None = email and telegram
@@ -72,9 +82,13 @@ class ScheduleConfig:
             timezone=timezone,
             funds=list(self.mf_codes or []),
             portfolios=list(self.portfolio_names or []),
+            ideas_market=self.ideas_market or self.market,
+            ideas_markets=list(self.ideas_markets or []),
+            ideas_categories=list(self.ideas_categories or []),
+            ideas_count=self.ideas_count or 3,
             smart=bool(self.smart_enabled),
             smart_top_n=self.smart_top_n or 5,
-            smart_ai_top=self.smart_ai_top if self.smart_ai_top is not None else 10,
+            smart_ai_top=self.smart_ai_top if self.smart_ai_top is not None else SMART_AI_TOP,
             smart_email_full=self.smart_email_full is not False,
             smart_file=self.smart_file if self.smart_file in SMART_FILES else "pdf",
             smart_file_channels=list(self.smart_file_channels if self.smart_file_channels is not None
@@ -95,7 +109,7 @@ def source_catalog(config=None) -> dict:
     it (funds and closed positions excluded - they have no chart analysis)."""
     from ..storage import HoldingRecord, PortfolioRecord, WatchlistRecord
 
-    db = DatabaseManager.instance(get_db_url(config=config))
+    db = DatabaseManager.for_config(config)
     with db.get_session() as session:
         watchlists = [
             {
@@ -115,7 +129,7 @@ def source_catalog(config=None) -> dict:
                 if (h.quantity or 0) <= 0:
                     continue
                 market = (h.market or "us").lower()
-                if market == "mf":  # mutual fund (AMFI code): reported in the funds section, not analysed
+                if market == "mf":  # mutual fund (AMFI code): reported under Your portfolio, not analysed
                     funds.append(str(h.symbol))
                     continue
                 symbols.append({"symbol": h.symbol.upper(), "market": market if market in KNOWN_MARKETS else "us"})
@@ -145,8 +159,45 @@ def resolve_targets(cfg: ScheduleConfig, config=None, catalog: Optional[dict] = 
     return [Target(sym, mkt) for sym, mkt in dict.fromkeys(pairs)]
 
 
+# Markets the stock-ideas scan can cover (marketmyna/services/ideas.py).
+IDEAS_MARKETS = ("us", "india", "china_a", "hong_kong", "crypto")
+
+
+def ideas_market(cfg: ScheduleConfig, targets) -> str:
+    """Market the "New stock ideas" section scans: the one picked in the
+    Scheduler, else the market most of the run's stocks are in (an Indian
+    watchlist gets Indian ideas), else the schedule's market."""
+    if cfg.ideas_market in IDEAS_MARKETS:
+        return cfg.ideas_market
+    counts = Counter(t.market for t in targets if t.market in IDEAS_MARKETS)
+    if counts:
+        return counts.most_common(1)[0][0]
+    return cfg.market if cfg.market in IDEAS_MARKETS else "us"
+
+
+# Markets "Trending for investors" can scan (marketmyna/services/hot_stocks.py).
+HOT_INVEST_MARKETS = ("india", "us", "china_a", "hong_kong", "crypto")
+
+
+def hot_invest_markets(cfg: ScheduleConfig, targets, limit: Optional[int] = None) -> list[str]:
+    """Markets "Trending for investors" scans: the ones picked in the
+    Scheduler, else the markets of the run's stocks, most stocks first; at
+    most `limit` (the plan's, None = any number)."""
+    picked = [m for m in cfg.hot_invest_markets or [] if m in HOT_INVEST_MARKETS]
+    if not picked:
+        counts = Counter(t.market for t in targets if t.market in HOT_INVEST_MARKETS)
+        picked = [m for m, _ in counts.most_common()]
+    return picked[:limit] if limit else picked
+
+
+def ideas_markets(cfg: ScheduleConfig, targets) -> list[str]:
+    """Markets "New stock ideas" scans: the ones picked, else ideas_market()."""
+    picked = [m for m in cfg.ideas_markets or [] if m in IDEAS_MARKETS]
+    return picked or [ideas_market(cfg, targets)]
+
+
 def resolve_funds(cfg: ScheduleConfig, config=None, catalog: Optional[dict] = None) -> list[str]:
-    """AMFI codes for the report's funds section: the ones picked in Settings,
+    """AMFI codes for the funds under Your portfolio: the ones picked in Settings,
     then funds held in / watched on the run's chosen portfolios and watchlists."""
     codes = [str(c) for c in (cfg.mf_codes or [])]
     srcs = cfg.run_sources()
@@ -165,7 +216,7 @@ def resolve_funds(cfg: ScheduleConfig, config=None, catalog: Optional[dict] = No
 
 class ScheduleConfigStore:
     def __init__(self, config=None):
-        self._db = DatabaseManager.instance(get_db_url(config=config))
+        self._db = DatabaseManager.for_config(config)
 
     @staticmethod
     def _record(session):
@@ -193,9 +244,14 @@ class ScheduleConfigStore:
                 stock_sections=dict(record.stock_sections or {}),
                 channel_languages=dict(record.channel_languages or {}),
                 mf_codes=list(record.mf_codes or []),
+                ideas_market=record.ideas_market,
+                ideas_markets=list(record.ideas_markets or ([record.ideas_market] if record.ideas_market else [])),
+                ideas_categories=list(record.ideas_categories or []),
+                ideas_count=record.ideas_count or 3,
+                hot_invest_markets=list(record.hot_invest_markets or []),
                 smart_enabled=bool(record.smart_enabled),
                 smart_top_n=record.smart_top_n or 5,
-                smart_ai_top=record.smart_ai_top if record.smart_ai_top is not None else 10,
+                smart_ai_top=record.smart_ai_top if record.smart_ai_top is not None else SMART_AI_TOP,
                 smart_email_full=record.smart_email_full is not False,
                 smart_file=record.smart_file or "pdf",
                 smart_file_channels=list(record.smart_file_channels) if record.smart_file_channels is not None else None,
@@ -227,6 +283,11 @@ class ScheduleConfigStore:
             record.stock_sections = dict(cfg.stock_sections or {})
             record.channel_languages = dict(cfg.channel_languages or {})
             record.mf_codes = list(cfg.mf_codes or [])
+            record.ideas_market = cfg.ideas_market
+            record.ideas_markets = [m for m in cfg.ideas_markets or [] if m in IDEAS_MARKETS] or None
+            record.ideas_categories = list(cfg.ideas_categories or [])
+            record.ideas_count = cfg.ideas_count
+            record.hot_invest_markets = list(cfg.hot_invest_markets or []) or None
             record.smart_enabled = cfg.smart_enabled
             record.smart_top_n = cfg.smart_top_n
             record.smart_ai_top = cfg.smart_ai_top

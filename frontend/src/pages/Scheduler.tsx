@@ -58,6 +58,14 @@ interface Draft {
   stockSections: Record<string, string[]>
   channelLanguages: Record<string, string>
   mfCodes: string[]
+  ideasMarket: string
+  ideasMarkets: string[]
+  ideasCategories: string[]
+  ideasCount: number
+  hotInvestMarkets: string[]
+  hotInvestScan: string[]
+  hotInvestLimit: number | null
+  hotInvestLocked: boolean
   smartEnabled: boolean
   smartTopN: number
   smartAiTop: number
@@ -79,6 +87,14 @@ export type ReportDraft = Pick<
   | 'symbols'
   | 'market'
   | 'mfCodes'
+  | 'ideasMarket'
+  | 'ideasMarkets'
+  | 'ideasCategories'
+  | 'ideasCount'
+  | 'hotInvestMarkets'
+  | 'hotInvestScan'
+  | 'hotInvestLimit'
+  | 'hotInvestLocked'
   | 'smartEnabled'
   | 'smartTopN'
   | 'smartAiTop'
@@ -110,9 +126,17 @@ function toDraft(cfg: ScheduleConfig): Draft {
     stockSections: cfg.stock_sections ?? {},
     channelLanguages: cfg.channel_languages ?? {},
     mfCodes: cfg.mf_codes ?? [],
+    ideasMarket: cfg.ideas_market ?? cfg.market,
+    ideasMarkets: cfg.ideas_markets ?? [],
+    ideasCategories: cfg.ideas_categories ?? [],
+    ideasCount: cfg.ideas_count ?? 3,
+    hotInvestMarkets: cfg.hot_invest_markets ?? [],
+    hotInvestScan: cfg.hot_invest_scan ?? [],
+    hotInvestLimit: cfg.hot_invest_limit ?? null,
+    hotInvestLocked: cfg.hot_invest_locked ?? false,
     smartEnabled: cfg.smart_enabled ?? false,
     smartTopN: cfg.smart_top_n ?? 5,
-    smartAiTop: cfg.smart_ai_top ?? 10,
+    smartAiTop: cfg.smart_ai_top ?? 5,
     smartEmailFull: cfg.smart_email_full ?? true,
     smartFile: cfg.smart_file ?? 'pdf',
     smartFileChannels: cfg.smart_file_channels ?? ['email', 'telegram'],
@@ -136,6 +160,10 @@ function toPayload(d: Draft): Partial<ScheduleConfig> {
     stock_sections: d.stockSections,
     channel_languages: d.channelLanguages,
     mf_codes: d.mfCodes,
+    ideas_markets: d.ideasMarkets,
+    ideas_categories: d.ideasCategories,
+    ideas_count: d.ideasCount,
+    hot_invest_markets: d.hotInvestMarkets,
     smart_enabled: d.smartEnabled,
     smart_top_n: d.smartTopN,
     smart_ai_top: d.smartAiTop,
@@ -464,7 +492,18 @@ function RunSources({
   const count = <T,>(items: T[], picked: (t: T) => boolean, size: (t: T) => number) =>
     items.filter(picked).reduce((n, t) => n + size(t), 0)
   const wlCount = count(watchlists, (w) => !draft.watchlistIds.length || draft.watchlistIds.includes(w.id), (w) => w.symbols.length)
-  const pfCount = count(portfolios, (p) => !draft.portfolioNames.length || draft.portfolioNames.includes(p.name), (p) => p.symbols.length)
+  const pfPicked = (p: (typeof portfolios)[number]) => !draft.portfolioNames.length || draft.portfolioNames.includes(p.name)
+  const pfCount = count(portfolios, pfPicked, (p) => p.symbols.length)
+  const pfFunds = count(portfolios, pfPicked, (p) => p.funds?.length ?? 0)
+  const pfDetail = [
+    pfCount || !pfFunds ? `${pfCount} stocks` : '',
+    pfFunds ? `${pfFunds} ${pfFunds === 1 ? 'fund' : 'funds'}` : '',
+  ].filter(Boolean).join(' + ')
+  // Chip size: stocks, plus funds when the portfolio has any ("12", "5 funds", "12 + 5 funds")
+  const pfSize = (p: (typeof portfolios)[number]) => {
+    const f = p.funds?.length ?? 0
+    return !f ? String(p.symbols.length) : p.symbols.length ? `${p.symbols.length} + ${f} funds` : `${f} funds`
+  }
 
   const chip = (on: boolean, label: string, onClick: () => void, key: string) => (
     <button
@@ -535,14 +574,14 @@ function RunSources({
         {option(
           'portfolio',
           'Portfolio holdings',
-          catalog == null ? 'Loading…' : portfolios.length ? `${pfCount} stocks you own` : 'No portfolio yet',
+          catalog == null ? 'Loading…' : portfolios.length ? `${pfDetail} you own` : 'No portfolio yet',
           portfolios.length > 1 ? (
             <div className="flex flex-wrap gap-1.5">
               {chip(!draft.portfolioNames.length, 'All', () => onChange({ portfolioNames: [] }), 'all')}
               {portfolios.map((p) =>
                 chip(
                   draft.portfolioNames.includes(p.name),
-                  `${p.name} · ${p.symbols.length}`,
+                  `${p.name} · ${pfSize(p)}`,
                   () =>
                     onChange({
                       portfolioNames: draft.portfolioNames.includes(p.name)

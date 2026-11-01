@@ -21,6 +21,17 @@ def mode_for(user_id) -> str:
     return MODE
 
 
+def analytics() -> bool:
+    """Always True: this app never gives calls (shared report code asks)."""
+    return True
+
+
+def report_calls() -> bool:
+    """Always False: reports describe each stock as Bullish / Neutral / Bearish,
+    never Buy / Hold / Sell, and carry no buy / sell levels, stops or targets."""
+    return False
+
+
 # A buy / hold / sell style rating (an analyst consensus, an AI reply) as a direction.
 OUTLOOKS = {"strong_buy": "bullish", "buy": "bullish", "hold": "neutral", "sell": "bearish", "strong_sell": "bearish"}
 

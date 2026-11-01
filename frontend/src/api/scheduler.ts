@@ -18,6 +18,17 @@ export interface ScheduleConfig {
   stock_sections: Record<string, string[]>
   channel_languages: Record<string, string>
   mf_codes: string[]
+  ideas_market: string
+  /** Markets "Stocks matching your screen" scans; empty = ideas_market (picked, or where most stocks trade). */
+  ideas_markets: string[]
+  ideas_categories: string[]
+  ideas_count: number
+  /** "Trending for investors": markets picked (empty = the run's stock markets). */
+  hot_invest_markets: string[]
+  /** Read only: what a run will scan (no market limit here, never locked). */
+  hot_invest_scan?: string[]
+  hot_invest_limit?: number | null
+  hot_invest_locked?: boolean
   smart_enabled: boolean
   smart_top_n: number
   smart_ai_top: number
@@ -43,8 +54,9 @@ export interface SourceSymbol {
 }
 
 export interface RunSourceCatalog {
-  watchlists: Array<{ id: number; name: string; symbols: SourceSymbol[] }>
-  portfolios: Array<{ name: string; symbols: SourceSymbol[] }>
+  watchlists: Array<{ id: number; name: string; symbols: SourceSymbol[]; funds?: string[] }>
+  // funds: mutual fund codes - covered in the report's funds section, not chart-analysed
+  portfolios: Array<{ name: string; symbols: SourceSymbol[]; funds?: string[] }>
 }
 
 export async function getRunSources(): Promise<RunSourceCatalog> {
@@ -92,8 +104,10 @@ export interface ReportOptions {
   languages: ReportLanguage[]
   sections: ReportSection[]
   channels: string[]
+  /** Listing categories for "Stocks matching your screen" (server: data/categories.py). */
+  categories: string[]
   llm_configured: boolean
-  /** 'analytics' on public deploys: no calls or Smart messaging. */
+  /** Always 'analytics': no calls; stock ideas as a screen, not picks. */
   compliance?: 'analytics'
 }
 
@@ -163,8 +177,11 @@ export interface SmartRow {
   trend?: string
   valuation?: string | null
   pe?: number | null
-  /** How the indicators lean, never a call (src/services/smart_report.py without_calls). */
-  reading?: 'positive' | 'mixed' | 'negative'
+  /** Never a call: Bullish / Neutral / Bearish from fundamentals and trend, and
+   * the figures behind it (marketmyna/services/outlook.py). Reports saved before
+   * this change carry positive / mixed / negative. */
+  reading?: 'bullish' | 'neutral' | 'bearish' | 'positive' | 'mixed' | 'negative'
+  why?: string
   attention?: number
   reasons?: string[]
   ai?: boolean

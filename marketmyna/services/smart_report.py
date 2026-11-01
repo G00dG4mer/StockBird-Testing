@@ -12,12 +12,14 @@ Every stock gets cheap, computed metrics (no AI):
                  (upper band if price is already above it)
   stop loss      buy point minus one average true range
   1-week range   price +/- one weekly standard deviation (~68% of weeks)
-  valuation      P/E vs its industry average (fundamental analyzer)
+  valuation      P/E vs its sector's median among the market's largest
+                 companies (marketmyna/services/valuation.py), as Valuation vs sector
   action         a score from trend, RSI, levels and valuation
 
 The points, stop and action are working values only: without_calls()
-turns the action into a bullish / neutral / bearish reading and drops the
-rest before anything is saved, sent or shown (marketmyna/core/compliance.py).
+replaces them with a Bullish / Neutral / Bearish view from the company's
+fundamentals and price trend (marketmyna/services/outlook.py) before anything
+is saved, sent or shown (marketmyna/core/compliance.py).
 
 Only the `ai_top` most "attention-worthy" stocks also get the full AI
 pipeline, so a 100-stock list doesn't burn 400 LLM calls a day.
@@ -35,15 +37,17 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from ..core.numbers import finite as _num
+from .outlook import NOTE as READING_NOTE  # shown on every general user's report: what the view is and is not
 
 logger = logging.getLogger(__name__)
 
 WORKERS = 6
 
 
-def compute_snapshot(history, info: Optional[dict] = None) -> dict:
+def compute_snapshot(history, info: Optional[dict] = None, sector_pe: Optional[float] = None) -> dict:
     """Levels, forecast range and rule-based action from price history
-    (and optional yfinance info for valuation). Pure: no network."""
+    (and optional yfinance info and the sector's median P/E for valuation).
+    Pure: no network."""
     close = history["close"].astype(float)
     high = history["high"].astype(float) if "high" in history else close
     low = history["low"].astype(float) if "low" in history else close
@@ -89,17 +93,14 @@ def compute_snapshot(history, info: Optional[dict] = None) -> dict:
     else:
         trend = "sideways"
 
+    from .outlook import facts as outlook_facts
+
     valuation, pe = None, None
     if info:
-        try:
-            from ..analysis.fundamental import FundamentalAnalyzer, yfinance_fundamentals
-
-            summary = FundamentalAnalyzer(yfinance_fundamentals(info)).get_summary()
-            status = (summary.get("valuation") or {}).get("status")
-            valuation = status if status and status != "N/A" else None
-            pe = _num((summary.get("valuation") or {}).get("value")) or None
-        except Exception:
-            pass
+        pe = _num(info.get("trailingPE")) or None
+        if pe and pe > 0 and sector_pe:
+            # Same bands as Valuation vs sector (valuation.BELOW / ABOVE).
+            valuation = "undervalued" if pe <= sector_pe * 0.8 else "overvalued" if pe >= sector_pe * 1.2 else "fair"
 
     score = {"uptrend": 1, "downtrend": -1}.get(trend, 0)
     score += 1 if rsi < 35 else -1 if rsi > 70 else 0
@@ -145,6 +146,8 @@ def compute_snapshot(history, info: Optional[dict] = None) -> dict:
         "volatility": volatility, "max_drawdown": max_drawdown,
         "high_52w": float(high.max()), "low_52w": float(low.min()),
         "action": action, "attention": round(attention, 2), "reasons": reasons,
+        # What a general user's Bullish / Neutral / Bearish view is built from (marketmyna/services/outlook.py).
+        "facts": {**outlook_facts(info, trend), **({"sector_pe": sector_pe} if sector_pe and pe else {})},
     }
 
 
@@ -166,7 +169,9 @@ def snapshot(symbol: str, market: str) -> dict:
                 info = call_with_deadline(lambda: yf.Ticker(yahoo_symbol(symbol, market)).info, 15) or {}
             except Exception:
                 info = {}
-        row.update(compute_snapshot(history, info))
+        from .outlook import sector_pe
+
+        row.update(compute_snapshot(history, info, sector_pe(info, market)))
         row["name"] = info.get("shortName") or info.get("longName")
     except Exception as exc:
         row["error"] = str(exc) or type(exc).__name__
@@ -194,39 +199,48 @@ def build_rows(targets, config, ai_top: int, analyze=None, snap=snapshot, mode: 
     return rows
 
 
-# A report shows what the indicators read, never a call (marketmyna/core/compliance.py).
-READINGS = {"strong_buy": "positive", "buy": "positive", "hold": "mixed", "sell": "negative", "strong_sell": "negative"}
-READING_LABELS = {"positive": "Bullish", "mixed": "Neutral", "negative": "Bearish"}
-READING_ICONS = {"positive": "▲", "mixed": "◆", "negative": "▼"}
+# A report shows a Bullish / Neutral / Bearish view built from fundamentals and
+# trend, never a call (marketmyna/core/compliance.py). Reports saved before this
+# change carry the older positive / mixed / negative reading; their labels stay.
+READING_LABELS = {"bullish": "Bullish", "neutral": "Neutral", "bearish": "Bearish"}
+READING_ICONS = {"bullish": "▲", "neutral": "◆", "bearish": "▼"}
+_OLD_READING_LABELS = {"positive": "Mostly positive", "mixed": "Mixed", "negative": "Mostly negative"}
+_OLD_READING_ICONS = {"positive": "▲", "mixed": "◆", "negative": "▼"}
 _NEUTRAL_REASONS = {"at its buy point": "near its support level", "at its sell point": "near its resistance level",
                     "oversold": "RSI below 30", "overbought": "RSI above 70"}
 
 
 def without_calls(row: dict) -> dict:
-    """The row with every call, level and stop removed and the computed
-    action turned into a reading of the indicators (positive / mixed /
-    negative). Verdict words (undervalued, at its buy point) go too."""
+    """The row with every call, level and stop removed and a Bullish /
+    Neutral / Bearish view from its fundamentals and trend in their place,
+    with the figures behind it ("why"). Verdict words (undervalued, at its
+    buy point) go too."""
     from ..core.compliance import CALL_FIELDS
+    from .outlook import outlook, why
 
     if "error" in row:
         return row
-    out = {k: v for k, v in row.items() if k not in CALL_FIELDS}
-    out["reading"] = READINGS.get(str(row.get("action") or "hold").lower(), "mixed")
+    out = {k: v for k, v in row.items() if k not in CALL_FIELDS and k not in ("ai_debate", "ai_risk")}
+    view = outlook(row.get("facts") or {"trend": row.get("trend")})
+    out["reading"] = view["view"]
+    out["why"] = why(view)
     out["reasons"] = [_NEUTRAL_REASONS.get(r, r) for r in row.get("reasons") or []]
     out["valuation"] = None  # "undervalued" / "overvalued" is a verdict; the P/E stays
     return out
 
 
 def reading_label(row: dict) -> str:
-    reading = row.get("reading") or "mixed"
+    reading = row.get("reading") or "neutral"
+    if reading in _OLD_READING_LABELS:
+        return f"{_OLD_READING_ICONS[reading]} {_OLD_READING_LABELS[reading]}"
     return f"{READING_ICONS[reading]} {READING_LABELS[reading]}"
 
 
 def save_report(config, rows: list[dict], title: str, meta: dict) -> str:
-    from ..storage import DatabaseManager, ReportRunRecord, get_db_url
+    from ..storage import DatabaseManager, ReportRunRecord
 
     token = secrets.token_urlsafe(16)
-    db = DatabaseManager.instance(get_db_url(config=config))
+    db = DatabaseManager.for_config(config)
     with db.get_session() as session:
         session.add(ReportRunRecord(token=token, title=title, stock_count=len(rows), rows=rows, meta=meta))
     return token
@@ -241,49 +255,83 @@ def _f(value, digits: int = 2) -> str:
     return f"{v:,.{digits}f}" if abs(v) >= 1 else f"{v:.4f}"
 
 
-def smart_message(rows: list[dict], prefs, lang: str, link: Optional[str], now: datetime) -> tuple[str, str]:
-    """(title, body): only the top N, one line each, then the link."""
-    from .report import CURRENCY_SYMBOLS
-    from .report_i18n import has_builtin, t
+def market_block(rows: list[dict], prefs, config) -> Optional[dict]:
+    """The Market overview for a smart run, when the section is ticked:
+    {"overview", "sectors", "take"}. It goes in the message only, never the file."""
+    if "market" not in prefs.sections:
+        return None
+    from .analysis_run import market_overview, market_sectors
+    from .report import market_review
+
+    good = [r for r in rows if "error" not in r]
+    try:
+        overview = market_overview(r["market"] for r in good)
+        if not overview:
+            return None
+        sectors = market_sectors((r["market"] for r in good), good)
+        return {"overview": overview, "sectors": sectors,
+                "take": market_review(overview, good, config, sectors=sectors)}
+    except Exception as exc:
+        logger.warning("Market overview unavailable for the smart message: %s", exc)
+        return None
+
+
+def smart_message(rows: list[dict], prefs, lang: str, link: Optional[str], now: datetime,
+                  market: Optional[dict] = None) -> tuple[str, str]:
+    """(title, body): the Market overview (when given), then only the top N,
+    one line each, then the link."""
+    from .outlook import EMOJI
+    from .report import CURRENCY_SYMBOLS, _market_lines, _one_line
+    from .report_i18n import has_builtin, t, tv
 
     lang_labels = lang if has_builtin(lang) else "en"
     good = [r for r in rows if "error" not in r]
     top = good[: prefs.smart_top_n]
     lines = [
-        f"📊 {t(lang_labels, 'smart_top', n=len(top))} · {now:%d %b %Y}",
+        f"{t(lang_labels, 'smart_top', n=len(top))} · {now:%d %b %Y}",
         "",
     ]
+    if market:
+        lines += _market_lines(market["overview"], lang_labels, market.get("sectors"))
+        if market.get("take"):
+            lines.append(f"   AI: {_one_line(market['take'], 320)}")
+        lines.append("")
     for r in top:
         cur = CURRENCY_SYMBOLS.get(r["market"], "")
-        reading = r.get("reading") or "mixed"
+        # Bullish / Neutral / Bearish and why, never a call (without_calls).
+        reading = r.get("reading") or "neutral"
         change = f" ({r['change_percent']:+.1f}%)" if _num(r.get("change_percent")) is not None else ""
-        lines.append(f"{READING_ICONS[reading]} {r['symbol']} {cur}{_f(r['price'])}{change} · "
-                     f"{t(lang_labels, 'indicators')}: {t(lang_labels, 'reading_' + reading)}")
+        view = tv(lang_labels, reading)
+        lines.append(f"{EMOJI.get(reading, '◆')} {r['symbol']} {cur}{_f(r['price'])}{change} · "
+                     f"{view.upper() if lang_labels == 'en' else view}")
+        if r.get("why"):
+            lines.append(f"   {t(lang_labels, 'why')}: {r['why'][:200]}{'…' if len(r['why']) > 200 else ''}")
         lines.append(f"   {t(lang_labels, 'normal')} {cur}{_f(r['normal_low'])}–{_f(r['normal_high'])} · "
                      f"{t(lang_labels, 'week')} {cur}{_f(r['week_low'])}–{_f(r['week_high'])}")
         why = r.get("ai_summary") or ", ".join(r.get("reasons") or [])
         if why:
             lines.append(f"   {why[:140]}{'…' if len(why) > 140 else ''}")
     lines.append("")
-    lines.append(f"📄 {t(lang_labels, 'full_report', n=len(rows))}" + (f": {link}" if link else ""))
-    lines.append(t(lang_labels, "reading_note"))
+    lines.append(f"{t(lang_labels, 'full_report', n=len(rows))}" + (f": {link}" if link else ""))
+    lines.append(t(lang_labels, "outlook_note"))
     lines.append(t(lang_labels, "disclaimer"))
     return t(lang_labels, "title"), "\n".join(lines)
 
 
 def html_report(rows: list[dict], title: str, now: datetime, link: Optional[str]) -> str:
     """Self-contained HTML table of every stock (for email and the artifact):
-    the indicators' reading and the ranges, no call, level or stop, with a
-    note on how to read it."""
+    the Bullish / Neutral / Bearish view and why, and the ranges; no call,
+    level or stop, with a note on how to read it."""
     from .report import CURRENCY_SYMBOLS
 
     esc = html_lib.escape
-    colors = {"positive": "#0b7a52", "mixed": "#8f5b00", "negative": "#c02f2f"}
-    head = ["Stock", "Price", "Day", "Indicators", "Normal range", "1-week range", "Trend", "RSI", "P/E", "What stands out"]
+    colors = {"bullish": "#0b7a52", "neutral": "#8f5b00", "bearish": "#c02f2f",
+              "positive": "#0b7a52", "mixed": "#8f5b00", "negative": "#c02f2f"}
+    head = ["Stock", "Price", "Day", "View", "Why", "Normal range", "1-week range", "Trend", "RSI", "P/E", "What stands out"]
     body = []
     for r in rows:
         if "error" in r:
-            body.append(f"<tr><td>{esc(r['symbol'])}</td><td colspan='9' style='color:#888'>no data: {esc(r['error'][:80])}</td></tr>")
+            body.append(f"<tr><td>{esc(r['symbol'])}</td><td colspan='10' style='color:#888'>no data: {esc(r['error'][:80])}</td></tr>")
             continue
         cur = CURRENCY_SYMBOLS.get(r["market"], "")
         chg = _num(r.get("change_percent"))
@@ -291,7 +339,8 @@ def html_report(rows: list[dict], title: str, now: datetime, link: Optional[str]
             f"<b>{esc(r['symbol'])}</b><br><span style='color:#666;font-size:11px'>{esc(r.get('name') or '')}</span>",
             f"{cur}{_f(r['price'])}",
             f"<span style='color:{'#0b7a52' if (chg or 0) >= 0 else '#c02f2f'}'>{'' if chg is None else f'{chg:+.1f}%'}</span>",
-            f"<b style='color:{colors[r.get('reading') or 'mixed']}'>{esc(reading_label(r))}</b>",
+            f"<b style='color:{colors.get(r.get('reading'), '#8f5b00')}'>{esc(reading_label(r))}</b>",
+            esc(r.get("why") or ""),
             f"{_f(r['normal_low'])}–{_f(r['normal_high'])}",
             f"{_f(r['week_low'])}–{_f(r['week_high'])}",
             esc(r["trend"]), f"{r['rsi']:.0f}", _f(r.get("pe"), 1),
@@ -307,16 +356,10 @@ def html_report(rows: list[dict], title: str, now: datetime, link: Optional[str]
 <table cellpadding="6" style="border-collapse:collapse;font-size:12px">
 <thead><tr style="background:#eceff4">{''.join(f'<th align="left">{h}</th>' for h in head)}</tr></thead>
 <tbody>{''.join(body)}</tbody></table>
-<p style="color:#777;font-size:11px">Indicators = how trend, momentum (RSI), where the price sits in its range and
-valuation lean today: bullish, neutral or bearish. Normal range = 20-day Bollinger band. 1-week range ≈
-where ~2 of 3 weeks end, from recent volatility. Computed from market data.</p></body></html>"""
-
-
-# Shown on every general user's report: what the reading is and is not.
-READING_NOTE = ("This report describes what the market data shows. It is not a recommendation to buy, sell or "
-                "hold any stock. \"Bullish\" or \"bearish\" means most of the indicators we "
-                "track lean that way today; they can change quickly and are often wrong. Do your own research or "
-                "speak to a SEBI-registered adviser before you invest.")
+<p style="color:#777;font-size:11px">View = Bullish, Neutral or Bearish from the company's return on equity, profit
+and sales growth, net margin, debt, P/E against its sector median and the price trend; Why lists the figures behind it.
+Normal range = 20-day Bollinger band. 1-week range ≈ where ~2 of 3 weeks end, from recent volatility. Computed from
+market data.</p></body></html>"""
 
 
 def run_smart(targets, prefs, config, dispatcher=None, dry_run: bool = False, analyze=None, snap=snapshot):
@@ -344,9 +387,10 @@ def run_smart(targets, prefs, config, dispatcher=None, dry_run: bool = False, an
     by_lang = prefs.languages_needed(channels)
     languages = list(dict.fromkeys([normalize_language(prefs.language), *by_lang]))
 
+    market = market_block(rows, prefs, config)
     reports = {}
     for lang in languages:
-        msg_title, body = smart_message(rows, prefs, lang, link, now)
+        msg_title, body = smart_message(rows, prefs, lang, link, now, market)
         if lang != "en":
             body = translate_report(body, lang, config) or body
         reports[lang] = (msg_title, body)

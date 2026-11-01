@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Callable, Optional
 
 import pandas as pd
@@ -83,8 +85,62 @@ def _scope(ctx: AgentContext, stage: str) -> str:
     reused for the cache's lifetime (marketmyna/llm/store.py) even as the live
     numbers in the prompt move, so a stock opened again, or booked by many
     users, costs no new AI call."""
-    parts = [stage, ctx.symbol.upper(), ctx.market, getattr(ctx, "mode", ""), getattr(ctx, "area", None) or ""]
+    # Analyst stages read the same data at every depth, so a Full or Specialist
+    # run's technical / risk / news answer also serves Quick and Standard. The
+    # decision stages weigh the other stages' views, which differ by depth.
+    mode = "any" if stage in _SAME_AT_EVERY_DEPTH else getattr(ctx, "mode", "")
+    parts = [stage, ctx.symbol.upper(), ctx.market, mode, getattr(ctx, "area", None) or ""]
     return "|".join(["agent", *parts])
+
+
+_SAME_AT_EVERY_DEPTH = {"technical", "risk", "news", "sentiment", "fundamentals"}
+
+
+# Scheduled reports (marketmyna/services/analysis_run.py): the commentary stages use
+# their rule-based text and the decision call also reads the news tone, so a
+# stock costs one AI call instead of one per stage. The Analyze page keeps the
+# AI's wording for every stage.
+_REPORT_RUN: "ContextVar[bool]" = ContextVar("marketmyna_report_run", default=False)
+
+
+@contextmanager
+def report_run():
+    token = _REPORT_RUN.set(True)
+    try:
+        yield
+    finally:
+        _REPORT_RUN.reset(token)
+
+
+_NEWS_ASK = (
+    ' Also include "news_tone": "positive", "negative" or "neutral" (the tone of the recent headlines '
+    'about this company; "neutral" if none are about it) and "news_summary": "1-2 sentences on what '
+    'the headlines report".'
+)
+
+
+def _wants_news(ctx: AgentContext) -> bool:
+    """A report run whose news stage left the headlines unread."""
+    if not _REPORT_RUN.get() or not ctx.news:
+        return False
+    news = ctx.get_opinion("news")
+    return news is not None and news.signal is None
+
+
+def _take_news(ctx: AgentContext, narrative: str) -> None:
+    """Puts the decision call's read of the headlines on the news stage."""
+    match = _JSON_RE.search(narrative or "")
+    try:
+        parsed = json.loads(match.group(0)) if match else {}
+    except (json.JSONDecodeError, TypeError):
+        parsed = {}
+    tone = str(parsed.get("news_tone") or "").lower()
+    news = ctx.get_opinion("news")
+    if news is None or tone not in ("positive", "negative", "neutral"):
+        return
+    news.signal = {"positive": "bullish", "negative": "bearish"}[tone] if tone != "neutral" else "neutral"
+    if parsed.get("news_summary"):
+        news.summary = str(parsed["news_summary"]).strip()
 
 
 def _call_llm(backend: GenerationBackend, system_prompt: str, prompt: str, scope: Optional[str] = None) -> str:
@@ -101,6 +157,8 @@ def _narrate(backend: GenerationBackend, system_prompt: str, prompt: str, fallba
     (technical, risk). If the LLM is missing or failing, the stage still
     succeeds with a rule-based sentence instead of taking the whole
     pipeline down - only the decision stage truly needs the model."""
+    if _REPORT_RUN.get():
+        return fallback  # a scheduled report: the rule-based text, no AI call
     try:
         # Commentary is a "level 1" job: use the fast/cheap model when one
         # is configured (the backend falls back to the main chain itself).
@@ -148,9 +206,9 @@ class TechnicalAgent:
 
         system_prompt = (
             "You are a technical analysis assistant for a stock research tool. "
-            "Given a structured summary of technical indicators, write a concise "
-            "2-4 sentence opinion on the current trend and momentum. Do not "
-            "restate raw numbers verbatim, interpret them."
+            "Given a structured summary of technical indicators, write at most 2 "
+            "short sentences (under 40 words) on the current trend and momentum. "
+            "Do not restate raw numbers verbatim, interpret them."
         )
         system_prompt = guard_prompt(system_prompt)
         prompt = (
@@ -457,11 +515,12 @@ class DecisionAgent:
         focus = _EXPLAIN_FOCUS.get(getattr(ctx, "area", None) or "", _EXPLAIN_FOCUS[""])
         system_prompt = guard_prompt(
             "You summarise research for a stock analytics tool that is not a registered adviser. "
-            f"Write one paragraph that explains what the figures show: {focus} Never recommend buying, holding, selling, "
+            f"In at most 3 short, plain sentences (under 60 words, figures over adjectives), explain what the "
+            f"figures show: {focus} Never recommend buying, holding, selling, "
             "accumulating or exiting, never give a price target or stop loss, and do not use words "
             "like attractive, cheap or expensive as a verdict. Also give the outlook the findings point to: "
             "bullish, neutral or bearish, as a direction, never as an instruction. Respond ONLY with a JSON "
-            'object: {"outlook": "bullish"|"neutral"|"bearish", "rationale": "one paragraph"}.'
+            'object: {"outlook": "bullish"|"neutral"|"bearish", "rationale": "at most 3 short sentences"}.'
         )
         prompt = (
             f"Symbol: {ctx.symbol} ({ctx.market})\n"
@@ -489,7 +548,25 @@ class DecisionAgent:
         social = social_block(ctx)
         if social:
             prompt += "\n\n" + social
+        view = _outlook_for(ctx)
+        if view:
+            # The report's Bullish / Neutral / Bearish list shows this figures-based view;
+            # the summary explains it and says where the findings cut against it, and the
+            # outlook stays the same, so the list and the summary never clash.
+            system_prompt += (
+                " The report also shows a figures-based view of this stock, computed by rules from its "
+                "fundamentals and price trend. Sentence 1: what lies behind that view. Sentence 2: what the "
+                "figures cannot show (news, momentum). Sentence 3: the main risk, or where the findings point "
+                "the other way. Use that view as the outlook."
+            )
+            prompt += (f"\n\nFigures-based view: {view['view'].capitalize()} "
+                       f"(in favour: {'; '.join(view['for']) or 'none'}; against: {'; '.join(view['against']) or 'none'})")
+        news = _wants_news(ctx)
+        if news:
+            system_prompt += _NEWS_ASK
         narrative = _call_llm(backend, system_prompt, prompt, scope=_scope(ctx, self.agent_name))
+        if news:
+            _take_news(ctx, narrative)
         match = _JSON_RE.search(narrative)
         rationale, direction = narrative, None
         if match:
@@ -499,7 +576,30 @@ class DecisionAgent:
                 direction = outlook(parsed.get("outlook"))
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
+        if view:
+            direction = view["view"]
         return AgentOpinion(agent_name=self.agent_name, summary=rationale, signal=direction, confidence=None, details={})
+
+
+def _outlook_for(ctx: AgentContext) -> Optional[dict]:
+    """Public mode: the stock's Bullish / Neutral / Bearish view and the
+    figures on each side (marketmyna/services/outlook.py), from the info and history
+    the run already has. Kept on ctx.outlook_facts for the report's list."""
+    try:
+        from ..services.outlook import facts, outlook, trend_of
+
+        if ctx.info is None and ctx.market != "crypto":
+            import yfinance as yf
+
+            from ..services.analysis_run import yahoo_symbol
+
+            ctx.info = yf.Ticker(yahoo_symbol(ctx.symbol, ctx.market)).info or {}
+        trend = trend_of(ctx.history["close"]) if ctx.history is not None else None
+        ctx.outlook_facts = facts(ctx.info or {}, trend, ctx.market)
+        return outlook(ctx.outlook_facts) if ctx.outlook_facts else None
+    except Exception as exc:
+        logger.info("Figures-based view for %s unavailable: %s", ctx.symbol, exc)
+        return None
 
 
 class SkillAgent:

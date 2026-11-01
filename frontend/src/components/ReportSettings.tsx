@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { searchListings } from '../api/listings'
 import SymbolSearch from './SymbolSearch'
+import { MARKETS, labelFor } from '../lib/options'
 import type { ReportOptions, SmartFile } from '../api/scheduler'
 import type { ReportDraft } from '../pages/Scheduler'
 import { cx } from '../lib/cx'
@@ -21,8 +22,11 @@ const FILE_CHANNELS = [
   { id: 'telegram', label: 'Telegram' },
 ]
 
-/** Built once per report (src/services/report.py REPORT_WIDE), never per stock. */
-const REPORT_WIDE = new Set(['market', 'calls', 'portfolio', 'alerts', 'hot_trade', 'hot_invest', 'funds'])
+/** Built once per report (marketmyna/services/report.py REPORT_WIDE), never per stock. */
+const REPORT_WIDE = new Set(['market', 'calls', 'portfolio', 'alerts', 'hot_trade', 'hot_invest', 'ideas'])
+
+/** Markets "Trending for investors" can scan (server: schedule_config.HOT_INVEST_MARKETS). */
+const HOT_MARKETS = MARKETS.filter((m) => m.value !== 'global')
 
 /** What the scheduled report contains and which language each channel
  * gets. Lives on the Scheduler page and saves with the schedule. */
@@ -82,6 +86,8 @@ export default function ReportSettings({
   // Saved sections that belong to the other area. Ids missing from the catalogue (an
   // old saved section) aren't in the report, so skip them.
   const hiddenOn = draft.reportSections.filter((id) => !visibleIds.has(id) && options.sections.some((s) => s.id === id))
+  const showIdeas = visibleIds.has('ideas')
+  const ideasLabel = options.sections.find((s) => s.id === 'ideas')?.label ?? 'Stocks matching your screen'
   const showFunds = visibleIds.has('funds')
   // Built once per report, not per stock, so they can't be customised per stock.
   const perStock = visible.filter((s) => !REPORT_WIDE.has(s.id))
@@ -300,7 +306,7 @@ export default function ReportSettings({
         </section>
 
         {/* ---------------------------------------------------- sections */}
-        <section className={cx(draft.smartEnabled && 'opacity-60')}>
+        <section>
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
             <span className="text-xs font-medium text-muted">Sections in every report</span>
             <div className="flex gap-3 text-xs">
@@ -323,41 +329,63 @@ export default function ReportSettings({
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {visible.map((s) => {
               const on = draft.reportSections.includes(s.id)
+              // Stocks matching your screen and Trending for investors: choose the markets right on the card.
+              const toggleIn = (list: string[], m: string) => (list.includes(m) ? list.filter((x) => x !== m) : [...list, m])
+              const markets =
+                on && s.id === 'ideas' ? (
+                  <InlineMarkets
+                    picked={draft.ideasMarkets}
+                    auto={draft.ideasMarkets.length ? null : [draft.ideasMarket]}
+                    onToggle={(m) => onChange({ ideasMarkets: toggleIn(draft.ideasMarkets, m) })}
+                  />
+                ) : on && s.id === 'hot_invest' ? (
+                  <InlineMarkets
+                    picked={draft.hotInvestMarkets}
+                    auto={draft.hotInvestMarkets.length ? null : draft.hotInvestScan}
+                    onToggle={(m) => onChange({ hotInvestMarkets: toggleIn(draft.hotInvestMarkets, m) })}
+                  />
+                ) : null
               return (
-                <label
+                <div
                   key={s.id}
                   className={cx(
-                    'flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                    'cursor-pointer',
+                    'rounded-lg border transition-colors',
                     on ? 'border-accent/60 bg-accent-soft' : 'border-line hover:border-line-strong',
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => onChange({ reportSections: toggleSection(draft.reportSections, s.id) })}
-                    className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2 text-sm font-medium">
-                      {s.label}
+                  <label className="flex items-start gap-3 px-3 py-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => onChange({ reportSections: toggleSection(draft.reportSections, s.id) })}
+                      className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 text-sm font-medium">{s.label}</span>
+                      <span className="block text-xs text-muted">
+                        {s.description}
+                        {s.id === 'market' && draft.smartEnabled && (
+                          <b className="font-medium text-fg"> Goes at the top of your Smart message.</b>
+                        )}
+                        {s.id !== 'market' && draft.smartEnabled && draft.smartFile !== 'none' && (
+                          <b className="font-medium text-fg"> In your report file.</b>
+                        )}
+                      </span>
                     </span>
-                    <span className="block text-xs text-muted">
-                      {s.description}
-                    </span>
-                  </span>
-                </label>
+                  </label>
+                  {markets && <div className="px-3 pb-2.5 ps-10">{markets}</div>}
+                </div>
               )
             })}
           </div>
           {draft.smartEnabled && (
             <p className="mt-2 text-xs text-muted">
-              Smart messaging is on: these sections and the per-stock choices below are used when it is turned off. The
-              report file always carries the same key figures.
+              Smart messaging is on: Market overview goes at the top of the short message; every other ticked section
+              goes in the report file (PDF or Excel) with the key figures of each stock.
             </p>
           )}
           {draft.reportSections.length === 0 && (
-            <p className="mt-2 text-xs text-warn">No sections selected: reports will only list each stock's name.</p>
+            <p className="mt-2 text-xs text-warn">No sections selected: reports will carry only their title.</p>
           )}
           {hiddenOn.length > 0 && section && (
             <p className="mt-2 text-xs text-faint">
@@ -374,6 +402,89 @@ export default function ReportSettings({
           )}
         </section>
 
+        {/* ------------------------------------------ trending for investors */}
+        {visibleIds.has('hot_invest') && (
+          <HotInvestMarkets
+            draft={draft}
+            on={draft.reportSections.includes('hot_invest')}
+            onChange={(hotInvestMarkets) => onChange({ hotInvestMarkets })}
+          />
+        )}
+
+        {/* ---------------------------------------------------- ideas */}
+        {showIdeas && (
+          <>
+        <section className={cx(!draft.reportSections.includes('ideas') && 'opacity-60')}>
+          <span className="mb-1 block text-xs font-medium text-muted">{ideasLabel}</span>
+          <p className="mb-3 text-xs text-muted">
+            Each report lists stocks outside your watchlist that are in a steady uptrend with sound company figures,
+            in the markets and categories you pick. With an AI key set, the AI picks the ones whose figures stand out
+            and says what stands out and what to watch; it is a screen, not a buy call.
+            {!draft.reportSections.includes('ideas') && ` Turn on the "${ideasLabel}" section above to receive them.`}
+          </p>
+          <span className="mb-1.5 block text-xs font-medium text-muted">
+            Markets to scan (none selected = where most of your stocks trade
+            {draft.ideasMarkets.length ? '' : `, now ${labelFor(MARKETS, draft.ideasMarket)}`})
+          </span>
+          <div className="mb-4 flex flex-wrap gap-1.5">
+            {HOT_MARKETS.map((m) => {
+              const on = draft.ideasMarkets.includes(m.value)
+              return (
+                <button
+                  key={m.value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    onChange({
+                      ideasMarkets: on ? draft.ideasMarkets.filter((x) => x !== m.value) : [...draft.ideasMarkets, m.value],
+                    })
+                  }
+                  className={cx(
+                    'rounded-full border px-3 py-1 text-xs font-medium',
+                    on ? 'border-accent bg-accent-soft text-fg' : 'border-line text-muted hover:text-fg',
+                  )}
+                >
+                  {m.label}
+                </button>
+              )
+            })}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-[160px]">
+            <Field label="How many per market">
+              <Select
+                options={[1, 2, 3, 4, 5, 6, 8, 10].map((n) => ({ value: String(n), label: String(n) }))}
+                value={String(draft.ideasCount)}
+                onChange={(e) => onChange({ ideasCount: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+          <span className="mt-4 mb-1.5 block text-xs font-medium text-muted">Focus categories (none selected = any)</span>
+          <div className="flex flex-wrap gap-1.5">
+            {options.categories.map((c) => {
+              const on = draft.ideasCategories.includes(c)
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    onChange({
+                      ideasCategories: on ? draft.ideasCategories.filter((x) => x !== c) : [...draft.ideasCategories, c],
+                    })
+                  }
+                  className={cx(
+                    'rounded-full border px-3 py-1 text-xs font-medium',
+                    on ? 'border-accent bg-accent-soft text-fg' : 'border-line text-muted hover:text-fg',
+                  )}
+                >
+                  {c}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+          </>
+        )}
 
         {/* ---------------------------------------------------- funds */}
         {showFunds && (
@@ -418,7 +529,7 @@ export default function ReportSettings({
           <span className="mb-1 block text-xs font-medium text-muted">Per-stock sections</span>
           <p className="mb-3 text-xs text-muted">
             Give a stock its own sections, e.g. {section === 'trader' ? 'trade levels and indicators for active trades, news for event plays' : 'news and fundamentals for long-term holdings, valuation for ones you may add to'}.
-            Report-wide sections (market overview, movers and AI outlook, portfolio, alerts, hot stocks) always follow the report settings above.
+            Report-wide sections (market overview, bullish / neutral / bearish list, portfolio, alerts, hot stocks) always follow the report settings above.
           </p>
           {draft.symbols.length === 0 ? (
             <p className="text-xs text-faint">Choose what to run above first.</p>
@@ -435,7 +546,7 @@ export default function ReportSettings({
                         {own
                           ? own.length
                             ? own.map((id) => options.sections.find((s) => s.id === id)?.label ?? id).join(', ')
-                            : 'Name only'
+                            : 'Left out'
                           : 'Uses report sections'}
                       </span>
                       {own && (
@@ -486,5 +597,88 @@ export default function ReportSettings({
       </CardBody>
       {footer}
     </Card>
+  )
+}
+
+/** Which markets "Trending for investors" scans: any number, changed any time. */
+function HotInvestMarkets({
+  draft,
+  on,
+  onChange,
+}: {
+  draft: ReportDraft
+  on: boolean
+  onChange: (markets: string[]) => void
+}) {
+  const picked = draft.hotInvestMarkets
+  const toggle = (m: string) => onChange(picked.includes(m) ? picked.filter((x) => x !== m) : [...picked, m])
+  return (
+    <section className={cx(!on && 'opacity-60')}>
+      <span className="mb-1 block text-xs font-medium text-muted">Trending for investors: markets</span>
+      <p className="mb-3 text-xs text-muted">
+        Quality stocks on a dip, earnings momentum and (India) what mutual funds added, from the largest companies of
+        the markets you pick. None picked = the markets of the stocks in your report
+        {draft.hotInvestScan.length > 0 && ` (now ${draft.hotInvestScan.map((m) => labelFor(MARKETS, m)).join(', ')})`}.
+        {!on && ' Turn on the "Trending for investors" section above to receive it.'}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {HOT_MARKETS.map((m) => {
+          const sel = picked.includes(m.value)
+          return (
+            <button
+              key={m.value}
+              type="button"
+              aria-pressed={sel}
+              onClick={() => toggle(m.value)}
+              className={cx(
+                'rounded-full border px-3 py-1 text-xs font-medium',
+                sel ? 'border-accent bg-accent-soft text-fg' : 'border-line text-muted hover:text-fg',
+              )}
+            >
+              {m.label}
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+/** Market chips on a section card: the picked markets, or (none picked) the
+ * ones a run will use automatically, shown faded. */
+function InlineMarkets({
+  picked,
+  auto,
+  onToggle,
+}: {
+  picked: string[]
+  auto: string[] | null
+  onToggle: (market: string) => void
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium text-muted">
+        Markets{auto && auto.length ? ` (none picked: ${auto.map((m) => labelFor(MARKETS, m)).join(', ')} from your stocks)` : ''}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {HOT_MARKETS.map((m) => {
+          const sel = picked.includes(m.value)
+          return (
+            <button
+              key={m.value}
+              type="button"
+              aria-pressed={sel}
+              onClick={() => onToggle(m.value)}
+              className={cx(
+                'rounded-full border px-2.5 py-0.5 text-[11px] font-medium',
+                sel ? 'border-accent bg-surface text-fg' : 'border-line text-muted hover:text-fg',
+              )}
+            >
+              {m.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }

@@ -73,7 +73,7 @@ no login, no plans and no limits: it has one owner (you), and every feature is o
 | --- | --- |
 | 📈 **Charts and trading tools** | Candlestick charts and indicators, scanner, backtesting, options payoff, pairs trading, position sizing, trading journal |
 | 💼 **Portfolios and funds** | Holdings and returns, CAS import, fund overlap, SIP planner, XIRR |
-| 🔔 **Alerts and scheduled reports** | Telegram, email, browser push, Discord, Slack, Teams, ntfy and more, on any schedule you like |
+| 🔔 **Alerts and scheduled reports** | Telegram, email, browser push, Discord, Slack, Teams, ntfy and more, on any schedule you like. Reports carry a Bullish / Neutral / Bearish list from company figures (with the reasons), market overview, trending stocks and stocks matching your screen; Smart messaging sends a short message plus a PDF or Excel file |
 | 🔀 **Trader and Investor areas** | One switch flips the menus and pages between short-term trading tools and long-term investing |
 | 🌍 **Seven languages** | The whole app, with light and dark themes |
 | 🔒 **Private by default** | One SQLite file on your computer; nothing leaves it except calls to the data and AI providers you choose |

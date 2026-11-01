@@ -55,6 +55,9 @@ class AgentContext:
     news: Optional[list] = None
     # What people say online (marketmyna/agent/sentiment.py): {"summary", "excerpts"}; None when not run or no posts.
     social: Optional[dict] = None
+    # The figures behind the stock's Bullish / Neutral / Bearish view
+    # (marketmyna/services/outlook.py), set by DecisionAgent so the report's list uses the same ones.
+    outlook_facts: Optional[dict] = None
 
     opinions: list[AgentOpinion] = field(default_factory=list)
     generated_at: datetime = field(default_factory=datetime.now)

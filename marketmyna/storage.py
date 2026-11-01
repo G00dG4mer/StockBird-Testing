@@ -219,6 +219,13 @@ class ScheduleConfigRecord(Base):
     stock_sections = Column(JSON, nullable=True)
     channel_languages = Column(JSON, nullable=True)
     mf_codes = Column(JSON, nullable=True)
+    # "Stocks matching your screen" (marketmyna/services/ideas.py): where to look and how many
+    ideas_market = Column(String(MARKET), nullable=True)  # the first of ideas_markets
+    ideas_markets = Column(JSON, nullable=True)
+    ideas_categories = Column(JSON, nullable=True)
+    ideas_count = Column(Integer, nullable=True)
+    # "Trending for investors": markets to scan (None = the run's stock markets)
+    hot_invest_markets = Column(JSON, nullable=True)
     # Smart messaging: short "top N" message + link to the full report
     smart_enabled = Column(Boolean, nullable=True)
     smart_top_n = Column(Integer, nullable=True)
@@ -708,6 +715,11 @@ class DatabaseManager:
         if db_url not in cls._instances:
             cls._instances[db_url] = cls(db_url)
         return cls._instances[db_url]
+
+    @classmethod
+    def for_config(cls, config=None) -> "DatabaseManager":
+        """The shared manager for the app database `config` points at."""
+        return cls.instance(get_db_url(config=config))
 
     @contextmanager
     def get_session(self):

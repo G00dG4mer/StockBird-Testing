@@ -22,7 +22,9 @@ A skill agent's failure is non-critical, same as risk's.
 
 from __future__ import annotations
 
+import contextvars
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from ..llm.backend_factory import create_generation_backend
@@ -53,10 +55,28 @@ MODE_CHAINS = {
 SPECIALIST_BASE_STAGES = ["technical", "risk", "news", "sentiment", "fundamentals"]
 SPECIALIST_FINAL_STAGES = ["decision"]
 
+# No AI key yet: the stages that work from data alone, each with its
+# rule-based text (agents._narrate); no AI is asked.
+DATA_ONLY_STAGES = ["technical", "risk"]
+
 # A failure in a critical stage aborts the whole run; a failure in any
 # other stage is logged and skipped, and the pipeline continues with
 # whatever opinions it already has.
 CRITICAL_STAGES = {"technical", "decision"}
+
+# Analysts that only wait on outside data (prices, filings, news, posts),
+# run at the same time once the technical stage has loaded the price
+# history. News searches by the company name the risk stage looks up and
+# the skill agents read its risk figures, so those wait for risk.
+PARALLEL_STAGES = {"risk", "news", "sentiment", "fundamentals"}
+
+
+def _parallel(agent) -> bool:
+    return agent.agent_name in PARALLEL_STAGES or agent.agent_name.startswith("skill:")
+
+
+def _needs(agent) -> set[str]:
+    return {"risk"} if agent.agent_name == "news" or agent.agent_name.startswith("skill:") else set()
 
 # StageCallback(event, stage_name, payload) - payload is an AgentOpinion
 # on "stage_done", an error message string on "stage_skipped", and None
@@ -96,6 +116,7 @@ class AgentOrchestrator:
         skill_limit: int = 3,
         ctx: Optional[AgentContext] = None,
         area: Optional[str] = None,
+        data_only: bool = False,
     ) -> AgentContext:
         """market_regime/skill_query/skill_limit only matter for
         mode="specialist" - they select which Skill instructions get
@@ -103,7 +124,9 @@ class AgentOrchestrator:
         They're accepted (and ignored) for other modes rather than
         rejected, so a caller doesn't need to special-case its own
         request-building around which mode it happens to be calling."""
-        if mode == "specialist":
+        if data_only:
+            chain = [self._agents[name] for name in DATA_ONLY_STAGES]
+        elif mode == "specialist":
             chain = self._build_specialist_chain(market_regime, skill_query, skill_limit)
         else:
             static_chain = MODE_CHAINS.get(mode)
@@ -118,28 +141,58 @@ class AgentOrchestrator:
         elif area:
             ctx.area = area
 
-        for agent in chain:
-            stage_name = agent.agent_name
-
-            if on_stage:
-                on_stage("stage_start", stage_name, None)
-
-            try:
-                opinion: AgentOpinion = agent.run(ctx, self.backend)
-            except Exception as exc:
-                if stage_name in CRITICAL_STAGES:
-                    logger.error("Critical stage '%s' failed: %s", stage_name, exc)
-                    raise
-                logger.warning("Non-critical stage '%s' failed, continuing: %s", stage_name, exc)
-                if on_stage:
-                    on_stage("stage_skipped", stage_name, str(exc))
-                continue
-
-            ctx.add_opinion(opinion)
-            if on_stage:
-                on_stage("stage_done", stage_name, opinion)
+        i = 0
+        while i < len(chain):
+            group = [chain[i]]
+            while _parallel(group[0]) and i + len(group) < len(chain) and _parallel(chain[i + len(group)]):
+                group.append(chain[i + len(group)])
+            if len(group) == 1:
+                opinions = [self._run_stage(group[0], ctx, on_stage)]
+            else:
+                opinions = self._run_group(group, ctx, on_stage)
+            for opinion in opinions:  # in chain order, whatever finished first
+                if opinion is not None:
+                    ctx.add_opinion(opinion)
+            i += len(group)
 
         return ctx
+
+    def _run_stage(self, agent, ctx: AgentContext, on_stage: Optional[StageCallback]) -> Optional[AgentOpinion]:
+        """One stage: its opinion, or None when a non-critical stage fails
+        (a critical failure is raised)."""
+        stage_name = agent.agent_name
+        if on_stage:
+            on_stage("stage_start", stage_name, None)
+        try:
+            opinion: AgentOpinion = agent.run(ctx, self.backend)
+        except Exception as exc:
+            if stage_name in CRITICAL_STAGES:
+                logger.error("Critical stage '%s' failed: %s", stage_name, exc)
+                raise
+            logger.warning("Non-critical stage '%s' failed, continuing: %s", stage_name, exc)
+            if on_stage:
+                on_stage("stage_skipped", stage_name, str(exc))
+            return None
+        if on_stage:
+            on_stage("stage_done", stage_name, opinion)
+        return opinion
+
+    def _run_group(self, group: list, ctx: AgentContext, on_stage: Optional[StageCallback]) -> list:
+        """Stages run at the same time, each after the ones it needs. Every
+        thread gets a copy of the caller's context (the signed-in user's data
+        scope and AI usage account)."""
+        futures: dict = {}
+
+        def work(agent):
+            for name in _needs(agent):
+                if name in futures:
+                    futures[name].exception()  # wait; its failure only means less data here
+            return self._run_stage(agent, ctx, on_stage)
+
+        with ThreadPoolExecutor(max_workers=len(group), thread_name_prefix="stage") as pool:
+            for agent in group:
+                futures[agent.agent_name] = pool.submit(contextvars.copy_context().run, work, agent)
+            return [futures[agent.agent_name].result() for agent in group]
 
     def _build_specialist_chain(
         self, market_regime: Optional[str], skill_query: Optional[str], skill_limit: int

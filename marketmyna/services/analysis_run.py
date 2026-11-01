@@ -133,6 +133,42 @@ def market_overview(markets) -> list[dict]:
     return out
 
 
+def market_sectors(markets, results) -> dict[str, dict]:
+    """market -> {"sectors": [(name, quadrant)], "yours": [(name, quadrant, n)]}:
+    every sector's 4-week momentum against the index (services/rotation),
+    and the sectors the run's stocks belong to (best effort)."""
+    from ..data.listings import get_store
+    from . import rotation
+
+    out = {}
+    for market in dict.fromkeys(markets):
+        if market not in rotation.ROTATION_MARKETS or market == "crypto":
+            continue
+        try:
+            sectors = rotation.build(market)["sectors"]
+        except Exception as exc:
+            logger.warning("Sector read for %s unavailable: %s", market, exc)
+            continue
+        if not sectors:
+            continue
+        quadrants = {s["sector"]: s["quadrant"] for s in sectors}
+        try:
+            category = {str(r["symbol"]).upper(): r.get("category") for r in get_store().rows(market)}
+        except Exception as exc:
+            logger.warning("Listings for %s unavailable: %s", market, exc)
+            category = {}
+        held: dict[str, int] = {}
+        for r in results:
+            cat = category.get(str(r["symbol"]).upper()) if r.get("market") == market else None
+            if cat in quadrants:
+                held[cat] = held.get(cat, 0) + 1
+        out[market] = {
+            "sectors": [(s["sector"], s["quadrant"]) for s in sectors],
+            "yours": [(c, quadrants[c], n) for c, n in sorted(held.items(), key=lambda kv: -kv[1])],
+        }
+    return out
+
+
 def _to_str_date(value):
     if isinstance(value, (list, tuple)):
         value = value[0] if value else None
@@ -149,6 +185,8 @@ def collect_extras(symbol: str, market: str, sections, ctx=None) -> dict:
 
     def load_info() -> dict:
         nonlocal info
+        if not info and ctx is not None and getattr(ctx, "info", None):
+            info = ctx.info  # already fetched during the run
         if not info and market != "crypto":
             try:
                 import yfinance as yf
@@ -165,6 +203,22 @@ def collect_extras(symbol: str, market: str, sections, ctx=None) -> dict:
         extras["low_52w"] = data.get("fiftyTwoWeekLow")
         extras["name"] = data.get("shortName") or data.get("longName")
 
+    if "calls" in sections:
+        # A general user's Bullish / Neutral / Bearish view and its reasons (marketmyna/services/outlook.py).
+        try:
+            from .outlook import facts, trend_of
+
+            history = getattr(ctx, "history", None) if ctx else None
+            if history is None:
+                from ..agent.agents import _resolve_fetcher
+
+                history = _resolve_fetcher(market).get_history(symbol, period="1y")
+            # The same figures the AI summary explained, when it ran (marketmyna/agent/agents.py _outlook_for).
+            extras["facts"] = (getattr(ctx, "outlook_facts", None) if ctx else None) or facts(
+                load_info() if market != "crypto" else {}, trend_of(history["close"]), market)
+        except Exception as exc:
+            logger.warning("Outlook figures for %s unavailable: %s", symbol, exc)
+
     if "fundamentals" in sections and market != "crypto":
         fundamentals = getattr(ctx, "fundamental_summary", None) if ctx else None
         if not fundamentals and load_info():
@@ -177,7 +231,8 @@ def collect_extras(symbol: str, market: str, sections, ctx=None) -> dict:
         if fundamentals:
             extras["fundamentals"] = {
                 k: fundamentals.get(k)
-                for k in ("overall_score", "valuation", "profitability", "financial_health", "growth", "dividend")
+                for k in ("overall_score", "quality_score", "valuation", "profitability", "financial_health", "growth",
+                          "dividend")
             }
 
     if "analysts" in sections and load_info().get("recommendationKey"):
@@ -242,6 +297,17 @@ def collect_extras(symbol: str, market: str, sections, ctx=None) -> dict:
     return extras
 
 
+def _no_ai(config) -> bool:
+    """True when no AI is set up yet (no key in Settings -> AI keys and no
+    model in config.json / env): the report is built from data alone."""
+    try:
+        from ..llm.channels import llm_configured
+
+        return not llm_configured(config)
+    except Exception:
+        return False
+
+
 def analyze_symbol(symbol: str, market: str, mode: str, config, orchestrator=None, sections=None) -> dict:
     """Run the agent pipeline for one symbol, never raising.
 
@@ -259,8 +325,17 @@ def analyze_symbol(symbol: str, market: str, mode: str, config, orchestrator=Non
     result: dict = {"symbol": symbol, "market": market, "quote": _quote(symbol, market)}
     try:
         orchestrator = orchestrator or AgentOrchestrator(config=config)
-        orchestrator.run(symbol, market, mode=mode, ctx=ctx)
-        result.update(ok=True, dashboard=build_dashboard(ctx))
+        if _no_ai(config):
+            # No AI key yet: a deliberate data report, not a run of AI stages
+            # that each fail and fall back.
+            orchestrator.run(symbol, market, mode=mode, ctx=ctx, data_only=True)
+            result.update(ok=True, no_ai=True, dashboard=build_dashboard(ctx))
+        else:
+            from ..agent.agents import report_run
+
+            with report_run():  # one AI call per stock: the decision, which also reads the news
+                orchestrator.run(symbol, market, mode=mode, ctx=ctx)
+            result.update(ok=True, dashboard=build_dashboard(ctx))
     except Exception as exc:
         result.update(
             ok=False,
@@ -281,7 +356,7 @@ def notify_failure(config, summary: str, dispatcher=None) -> dict[str, bool]:
         from ..notifiers.dispatcher import NotificationDispatcher
 
         dispatcher = dispatcher or NotificationDispatcher(config)
-        return dispatcher.send_all(summary, title="⚠️ MarketMyna scheduled run failed", purpose="system_error")
+        return dispatcher.send_all(summary, title="MarketMyna scheduled run failed", purpose="system_error")
     except Exception:
         logger.exception("Could not send failure notification")
         return {}
@@ -303,15 +378,31 @@ def deliver_report(results: list[dict], prefs, config, dispatcher=None, dry_run:
     by_lang = prefs.languages_needed(channels)
     languages = [normalize_language(prefs.language), *by_lang]
 
-    overview = market_take = None
+    overview = market_take = sectors = None
     if "market" in prefs.sections:
         overview = market_overview(r["market"] for r in results)
-        market_take = market_review(overview, results, config)
-    funds = None
-    if "funds" in prefs.sections and prefs.funds:
-        from .funds import fund_snapshots
+        sectors = market_sectors((r["market"] for r in results), results)
+        market_take = market_review(overview, results, config, sectors=sectors)
+    ideas = None
+    if "ideas" in prefs.sections:
+        try:
+            from .ideas import find_ideas
 
-        funds = fund_snapshots(prefs.funds)
+            ideas = []
+            for market in prefs.ideas_markets or [prefs.ideas_market]:
+                ideas += find_ideas(market, prefs.ideas_categories, prefs.ideas_count,
+                                    exclude=[r["symbol"] for r in results], config=config)
+        except Exception as exc:
+            logger.warning("New ideas unavailable: %s", exc)
+
+    sections = prefs.all_sections()
+    portfolios = funds = None
+    if "portfolio" in sections:
+        # Funds held in the portfolios, then the ones picked or watched (prefs.funds).
+        nav = fund_cache()
+        portfolios = portfolio_snapshots(prefs.portfolios, results, config, fund=nav)
+        codes = [c for p in portfolios for c in p.get("fund_codes", [])] + [str(c) for c in prefs.funds or []]
+        funds = [f for f in (nav(c) for c in dict.fromkeys(codes)) if f]
         try:  # lumpsum window / dip check per fund (cached, equity and hybrid only)
             from .mf_lumpsum import assess_fund
 
@@ -319,14 +410,12 @@ def deliver_report(results: list[dict], prefs, config, dispatcher=None, dry_run:
                 f["lumpsum"] = assess_fund(f["code"], f.get("category") or "", f.get("name") or "")
         except Exception as exc:
             logger.warning("Fund dip check unavailable: %s", exc)
-
-    sections = prefs.all_sections()
-    portfolios = portfolio_snapshots(prefs.portfolios, results, config) if "portfolio" in sections else None
     alerts = alert_digest(results, config) if "alerts" in sections else None
-    hot = hot_blocks(results, sections)
+    hot = hot_blocks(results, sections, invest_markets=getattr(prefs, "hot_invest_markets", None),
+                     invest_detail="hot_invest" in sections)
 
     reports = render_reports(results, prefs, languages, config=config, overview=overview,
-                             funds=funds, market_take=market_take,
+                             funds=funds, market_take=market_take, sectors=sectors, ideas=ideas,
                              portfolios=portfolios, alerts=alerts, hot=hot)
     messages = {ch: reports[lang] for lang, chs in by_lang.items() for ch in chs}
     if dry_run or not messages:
@@ -345,11 +434,28 @@ def _one_user_scope() -> bool:
 CURRENCY = {"india": "₹", "us": "$", "china_a": "¥", "hong_kong": "HK$", "crypto": "$", "mf": "₹"}
 
 
-def portfolio_snapshots(names: list[str], results: list[dict], config=None, quote=None) -> list[dict]:
+def fund_cache():
+    """code -> fund_snapshot (NAV, day change, 1M / 1Y), each fetched once per run."""
+    from .funds import fund_snapshot
+
+    seen: dict = {}
+
+    def get(code):
+        code = str(code).strip()
+        if code not in seen:
+            seen[code] = fund_snapshot(code)
+        return seen[code]
+
+    return get
+
+
+def portfolio_snapshots(names: list[str], results: list[dict], config=None, quote=None, fund=None) -> list[dict]:
     """Value, today's change and total gain of each portfolio (all of them
     when `names` is empty), priced from the report's own quotes where it has
-    them. Mutual funds use their latest NAV. Best effort, never raises."""
-    from ..storage import DatabaseManager, HoldingRecord, PortfolioRecord, get_db_url
+    them. Mutual funds use their latest NAV, and its change from the NAV
+    before when `fund` (fund_cache) is given; "fund_codes" lists the funds
+    held. Best effort, never raises."""
+    from ..storage import DatabaseManager, HoldingRecord, PortfolioRecord
 
     if not _one_user_scope():
         return []
@@ -357,7 +463,7 @@ def portfolio_snapshots(names: list[str], results: list[dict], config=None, quot
     known = {(r["symbol"].upper(), r["market"]): r.get("quote") or {} for r in results}
     out = []
     try:
-        with DatabaseManager.instance(get_db_url(config=config)).get_session() as session:
+        with DatabaseManager.for_config(config).get_session() as session:
             rows = []
             for p in session.query(PortfolioRecord).order_by(PortfolioRecord.id):
                 if names and p.name not in names:
@@ -373,18 +479,30 @@ def portfolio_snapshots(names: list[str], results: list[dict], config=None, quot
         if not holdings:
             continue
         value = cost = day = prev_value = 0.0
-        movers, markets = [], set()
+        movers, markets, fund_codes = [], set(), []
         for symbol, market, qty, avg, last in holdings:
             markets.add(market)
-            price = change = None
+            price = change = label = None
             if market == "mf":
-                try:
-                    from .mf_holdings import latest
+                fund_codes.append(str(symbol))
+                snap = None
+                if fund is not None:
+                    try:
+                        snap = fund(symbol)
+                    except Exception:
+                        snap = None
+                if snap and snap.get("nav"):
+                    price, label = snap["nav"], snap.get("name")
+                    pct_ = snap.get("change_percent")
+                    change = price - price / (1 + pct_ / 100) if pct_ is not None else None
+                else:
+                    try:
+                        from .mf_holdings import latest
 
-                    info = latest(symbol) or {}
-                    price, change = info.get("nav"), None
-                except Exception:
-                    pass
+                        info = latest(symbol) or {}
+                        price, change = info.get("nav"), None
+                    except Exception:
+                        pass
             else:
                 q = known.get((symbol.upper(), market))
                 if q is None:
@@ -401,7 +519,7 @@ def portfolio_snapshots(names: list[str], results: list[dict], config=None, quot
             if change is not None:
                 day += qty * change
                 prev_value += qty * (price - change)
-                movers.append({"symbol": symbol.upper(), "change": qty * change,
+                movers.append({"symbol": symbol.upper(), "name": label, "change": qty * change,
                                "change_pct": change / (price - change) * 100 if price - change else None})
             else:
                 prev_value += qty * price
@@ -412,6 +530,7 @@ def portfolio_snapshots(names: list[str], results: list[dict], config=None, quot
             "day_change": day, "day_change_pct": day / prev_value * 100 if prev_value else None,
             "gain": value - cost if cost else None, "gain_pct": (value - cost) / cost * 100 if cost else None,
             "movers": [m for m in movers[:3] if m["change"]],
+            "fund_codes": fund_codes,
         })
     return out
 
@@ -422,7 +541,7 @@ def alert_digest(results: list[dict], config=None, now: Optional[datetime] = Non
     active price alerts within `near_pct` of their level. Never raises."""
     from datetime import timedelta
 
-    from ..storage import DatabaseManager, PriceAlertEventRecord, PriceAlertRecord, get_db_url
+    from ..storage import DatabaseManager, PriceAlertEventRecord, PriceAlertRecord
     from ..trading.alerts import describe
 
     if not _one_user_scope():
@@ -431,7 +550,7 @@ def alert_digest(results: list[dict], config=None, now: Optional[datetime] = Non
     now = now or datetime.now()
     known = {(r["symbol"].upper(), r["market"]): r.get("quote") or {} for r in results}
     try:
-        with DatabaseManager.instance(get_db_url(config=config)).get_session() as session:
+        with DatabaseManager.for_config(config).get_session() as session:
             fired = [{"symbol": e.symbol, "message": e.message, "at": e.created_at}
                      for e in session.query(PriceAlertEventRecord)
                      .filter(PriceAlertEventRecord.created_at >= now - timedelta(hours=24))
@@ -464,28 +583,42 @@ def alert_digest(results: list[dict], config=None, now: Optional[datetime] = Non
 
 # Boards each hot section shows in a report, three rows each.
 HOT_BOARDS = {"hot_trade": ("trader", ("momentum", "activity", "breakouts")),
-              "hot_invest": ("investor", ("quality_dip", "earnings", "funds_adding"))}
+              "hot_invest": ("investor", ("quality_dip", "earnings", "funds_adding",
+                                          "crypto_dips", "crypto_strong"))}
+# "Trending for investors" in detail (always, in a scheduled report): every
+# investor board, more rows, and each stock's figures on a line of their own.
+HOT_INVEST_DETAIL_BOARDS = ("quality_dip", "earnings", "value_turning", "compounders", "income", "funds_adding",
+                            "crypto_dips", "crypto_strong")
+HOT_INVEST_DETAIL_ROWS = 4
 
 
-def hot_blocks(results: list[dict], sections, rows_per_board: int = 3) -> list[dict]:
-    """Hot / trending stocks for the report's stock markets (marketmyna/services/hot_stocks.py)."""
+def hot_blocks(results: list[dict], sections, rows_per_board: int = 3,
+               invest_markets: Optional[list[str]] = None, invest_detail: bool = False) -> list[dict]:
+    """Hot / trending stocks for the report's stock markets (marketmyna/services/hot_stocks.py).
+    "Trending for investors" scans `invest_markets` instead when given (the
+    Scheduler's pick), and with `invest_detail` carries every investor board
+    and more rows."""
     from . import hot_stocks
     from .discovery import DISCOVERY_MARKETS
 
     markets = [m for m in dict.fromkeys(r["market"] for r in results) if m in DISCOVERY_MARKETS]
     out = []
     for section, (area, keys) in HOT_BOARDS.items():
-        if section not in sections or not markets:
+        scan = [m for m in invest_markets if m in DISCOVERY_MARKETS] if section == "hot_invest" and invest_markets else markets
+        if section not in sections or not scan:
             continue
+        detail = section == "hot_invest" and invest_detail
+        want = HOT_INVEST_DETAIL_BOARDS if detail else keys
+        rows = HOT_INVEST_DETAIL_ROWS if detail else rows_per_board
         per_market = {}
-        for market in markets:
+        for market in scan:
             try:
                 data = hot_stocks.trader(market) if area == "trader" else hot_stocks.investor(market)
             except Exception as exc:
                 logger.warning("Hot stocks (%s, %s) unavailable: %s", area, market, exc)
                 continue
-            boards = [{**b, "rows": b["rows"][:rows_per_board]} for b in data["boards"] if b["key"] in keys]
+            boards = [{**b, "rows": b["rows"][:rows]} for b in data["boards"] if b["key"] in want]
             per_market[market] = boards
-        out.append({"section": section, "area": area, "markets": per_market})
+        out.append({"section": section, "area": area, "markets": per_market, "detail": detail})
     return out
 

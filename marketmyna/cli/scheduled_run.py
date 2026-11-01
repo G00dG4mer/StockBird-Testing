@@ -24,6 +24,9 @@ workflow passes GitHub Secrets/Variables in:
     SMART_EMAIL_FULL "false": email gets only the short message
     REPORT_BASE_URL  public MarketMyna address for full-report links
     MF_LIST          AMFI scheme codes for the mutual-fund section: "122639,120503"
+    IDEAS_MARKET     market(s) to scan for "Stocks matching your screen" (default: MARKET)
+    IDEAS_CATEGORIES focus categories, e.g. "Technology,Agriculture" (default: any)
+    IDEAS_COUNT      how many stocks to list (default 3)
     + LLM_* and every notification channel field (TELEGRAM_BOT_TOKEN, ...),
       read by Config.apply_env().
 
@@ -69,9 +72,9 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def _watchlist_symbols(config: Config, name: str) -> str:
     """Symbols from a saved in-app watchlist, as a STOCK_LIST-style spec."""
-    from ..storage import DatabaseManager, WatchlistRecord, get_db_url
+    from ..storage import DatabaseManager, WatchlistRecord
 
-    db = DatabaseManager.instance(get_db_url(config=config))
+    db = DatabaseManager.for_config(config)
     with db.get_session() as session:
         record = session.query(WatchlistRecord).filter(WatchlistRecord.name == name).first()
         if record is None:
@@ -111,12 +114,12 @@ def parse_list(raw: str) -> list[str]:
 
 
 def build_prefs(
-    config: Config, mode: str, timezone: str, language: str | None = None
+    config: Config, mode: str, timezone: str, language: str | None = None, market: str = "india"
 ) -> ReportPrefs:
     """Saved Scheduler preferences, overridden by env vars / flags."""
     prefs = _saved_prefs(config)
     if prefs is None:
-        prefs = ReportPrefs()
+        prefs = ReportPrefs(ideas_market=market)
     prefs.mode, prefs.timezone = mode, timezone
     if language or os.environ.get("REPORT_LANGUAGE", "").strip():
         prefs.language = normalize_language(language or os.environ["REPORT_LANGUAGE"])
@@ -129,6 +132,13 @@ def build_prefs(
         }
     if os.environ.get("MF_LIST", "").strip():
         prefs.funds = [c for c in parse_list(os.environ["MF_LIST"]) if c.isdigit()]
+    if os.environ.get("IDEAS_MARKET", "").strip():
+        prefs.ideas_markets = [m.lower() for m in parse_list(os.environ["IDEAS_MARKET"])]
+        prefs.ideas_market = prefs.ideas_markets[0]
+    if os.environ.get("IDEAS_CATEGORIES", "").strip():
+        prefs.ideas_categories = parse_list(os.environ["IDEAS_CATEGORIES"])
+    if os.environ.get("IDEAS_COUNT", "").strip():
+        prefs.ideas_count = max(1, min(10, int(os.environ["IDEAS_COUNT"])))
     if os.environ.get("SMART_MESSAGING", "").strip():
         prefs.smart = os.environ["SMART_MESSAGING"].strip().lower() in ("1", "true", "yes", "on")
     if os.environ.get("SMART_TOP_N", "").strip():
@@ -240,7 +250,7 @@ def _main(args, config) -> int:
     else:
         logger.warning("No AI model configured (LLM_MODEL / LLM_CHANNELS): reports carry technical/risk signals but no AI decision.")
 
-    prefs = build_prefs(config, args.mode, args.timezone, args.language)
+    prefs = build_prefs(config, args.mode, args.timezone, args.language, market=args.market)
     logger.info("Report: language=%s sections=%s", prefs.language, ",".join(prefs.sections))
     if prefs.smart:
         return _run_smart(targets, prefs, config, args)

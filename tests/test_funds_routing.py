@@ -8,17 +8,18 @@ from marketmyna.services.report import ReportPrefs, build_report
 
 
 def test_report_funds_and_market_take():
-    prefs = ReportPrefs(sections=["market", "funds"])
+    """Mutual funds sit inside Your portfolio; ones not held show as funds you watch."""
+    prefs = ReportPrefs(sections=["market", "portfolio"])
     funds = [{"name": "Parag Parikh Flexi Cap Fund - Direct Plan - Growth", "nav": 89.6034,
               "change_percent": -0.82, "return_1m": 2.1, "return_1y": 14.2}]
     overview = [{"name": "NIFTY 50", "price": 23095.4, "change_percent": 0.14}]
     _, text = build_report([], prefs, "en", overview=overview, funds=funds,
                            market_take="Indices edged higher.", now=datetime(2026, 9, 25, tzinfo=ZoneInfo("Asia/Kolkata")))
-    assert "💼 Mutual funds" in text
+    assert "Funds you watch (not owned)" in text
     assert "NAV ₹89.6034 (-0.82%) · 1M +2.10% · 1Y +14.20%" in text
-    assert "🤖 Indices edged higher." in text
-    _, hindi = build_report([], prefs, "hi", funds=funds)
-    assert "म्यूचुअल फंड" in hindi
+    assert "AI: Indices edged higher." in text
+    _, off = build_report([], ReportPrefs(sections=["market"]), "en", overview=overview, funds=funds)
+    assert "NAV ₹89.6034" not in off
 
 
 def test_fund_snapshot(monkeypatch):

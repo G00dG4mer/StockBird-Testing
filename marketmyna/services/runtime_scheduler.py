@@ -45,11 +45,14 @@ from typing import Callable, Optional
 
 from ..core import tenant
 from .analysis_run import analyze_symbol, deliver_report, notify_failure
-from .schedule_config import ScheduleConfig, ScheduleConfigStore, resolve_funds, resolve_targets
+from .schedule_config import (hot_invest_markets, ideas_market, ideas_markets, resolve_funds, ScheduleConfig,
+                              ScheduleConfigStore, resolve_targets)
 
 logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SECONDS = 30.0
+# Analysis workers stop after this long without a wave (marketmyna/services/worker_pool.py).
+WORKER_IDLE_SECONDS = 600.0
 DEFAULT_WATCHDOG_SECONDS = 30 * 60.0
 
 
@@ -196,6 +199,13 @@ class RuntimeSchedulerService:
                 self._check_and_maybe_run()
             except Exception:
                 logger.exception("Scheduler check-and-run failed")
+            if self._pool is not None:
+                try:
+                    stopped = self._pool.release_idle(WORKER_IDLE_SECONDS)
+                    if stopped:
+                        logger.info("Stopped %d idle analysis workers to free memory", stopped)
+                except Exception:
+                    logger.exception("Releasing idle analysis workers failed")
             self._stop_event.wait(CHECK_INTERVAL_SECONDS)
 
     def _check_and_maybe_run(self) -> None:
@@ -419,6 +429,9 @@ class RuntimeSchedulerService:
             logger.exception("Could not read the run's watchlists/portfolios")
             targets = []
             notify_failure(self._config, f"Could not read the watchlists/portfolios to run: {exc}")
+        prefs.ideas_market = ideas_market(cfg, targets)  # picked, else where most of the stocks trade
+        prefs.ideas_markets = ideas_markets(cfg, targets)
+        prefs.hot_invest_markets = hot_invest_markets(cfg, targets)  # picked, else the stocks' markets
         # Smart messaging strips every call, level and stop (smart_report.without_calls).
         smart = bool(prefs.smart and targets)
         return {"cfg": cfg, "prefs": prefs, "targets": targets, "mode": run_mode,
