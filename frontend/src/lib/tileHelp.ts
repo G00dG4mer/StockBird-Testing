@@ -87,9 +87,9 @@ const TILE_HELP: Record<string, TileHelp> = {
     note: 'Disclosures are monthly, so holdings can be weeks old.',
   },
   'Ethical screen': {
-    about: 'An ethical check: whether the business and the balance sheet meet common ethical-investing rules.',
-    read: 'The business must not be on the excluded list (e.g. interest-based banking, alcohol, gambling). Debt, cash and interest income must stay under the limits shown (the standard index limit, with a stricter line where standards differ).',
-    note: 'A screening aid, not a final ruling. Standards differ at the edges.',
+    about: 'What the business does, and how much debt, cash and interest income it has. Data only - no verdict.',
+    read: 'Ethical business means no excluded activity (alcohol, tobacco, gambling, pork, adult content, weapons). Banks, lenders and insurers are tagged interest-based. Each ratio shows its value with the levels index providers use as markers, so you can decide what fits your values.',
+    note: 'Built from company statements. You make the call.',
   },
   'Financial statements': {
     about: 'The income statement, balance sheet and cash flow, yearly or quarterly.',

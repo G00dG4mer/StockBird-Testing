@@ -121,8 +121,8 @@ def get_financials_ai_summary(
 
 @router.get("/stocks/{symbol}/shariah")
 def get_shariah(symbol: str, market: str = Query(default="us")) -> dict:
-    """Shariah screen: business activity, debt / cash / receivables ratios
-    and interest income (S&P + AAOIFI limits), plus purification - no AI."""
+    """Ethical screen: business activity, debt / cash / receivables ratios
+    and interest income, shown next to index-provider reference levels. Data only, no verdict - no AI."""
     from marketmyna.services.shariah import build_shariah_profile
 
     try:

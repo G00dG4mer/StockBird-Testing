@@ -14,8 +14,8 @@
     "count_one": "{{n}} ético",
     "count_many": "{{n}} éticos",
     "count_other": "{{n}} éticos",
-    "onDescription": "Mostrando empresas e fundos aprovados no filtro ético. Abra uma ação para ver os índices de dívida, caixa e receita de juros e a parte dos dividendos a doar para caridade.",
-    "offDescription": "Oculta bancos, seguradoras, álcool, tabaco, jogos de azar e outros negócios excluídos, além de fundos convencionais."
+    "onDescription": "Mostrando negócios sem atividade excluída ou baseada em juros, e fundos com filtro ético. Abra uma ação para ver dívida, caixa e receita de juros.",
+    "offDescription": "Deixe de fora álcool, tabaco, jogos de azar e outros negócios excluídos, bancos e seguradoras, e fundos de dívida e convencionais."
   },
   "marketTabs": {
     "india": {
@@ -73,10 +73,11 @@
   "loadError": "Não foi possível carregar a lista",
   "categoryGuessed": "Categoria deduzida pelo nome da empresa",
   "badge": {
-    "halal": "Ético",
-    "doubtful": "Duvidoso",
-    "haram": "Não ético",
-    "unknown": "Não filtrado"
+    "ethical": "Ético",
+    "interest": "Com juros",
+    "mixed": "Misto",
+    "excluded": "Excluído",
+    "unknown": "Sem classificação"
   },
   "empty": {
     "title": "Nenhum resultado",
@@ -119,14 +120,16 @@
     "ethical": "Ético",
     "ethicalHint": "filtro de investimento ético",
     "shariah": {
-      "halal": "Éticos",
-      "halalHint": "Fundos: mandato com filtro ético. Ações: o negócio passa no filtro - abra a ação para ver os índices de dívida / caixa / receita de juros",
-      "doubtful": "Duvidosos",
-      "doubtfulHint": "Atividade mista (hotéis, mídia, REITs…) - confira as fontes de receita",
-      "haram": "Não conformes",
-      "haramHint": "Finanças ou seguros com juros, álcool, tabaco, jogos de azar, carne suína, armas, conteúdo adulto - ou um fundo convencional / com juros",
+      "ethical": "Negócio ético",
+      "ethicalHint": "Ações: sem atividade excluída ou baseada em juros. Fundos: mandato com filtro ético. Dívida e juros estão na página da ação",
+      "interest": "Baseado em juros",
+      "interestHint": "Bancos, credores, seguradoras e corretoras; fundos de dívida, híbridos e alavancados",
+      "mixed": "Atividade mista",
+      "mixedHint": "Hotéis, mídia, REITs, fundos de todos os setores... - veja de onde vem a receita",
+      "excluded": "Atividade excluída",
+      "excludedHint": "Álcool, tabaco, jogos de azar, carne de porco, conteúdo adulto, armas, cannabis",
       "unknown": "Sem classificação",
-      "unknownHint": "Sem dados de setor - abra a ação para uma análise completa"
+      "unknownHint": "Sem dados de setor - abra a ação para ver detalhes"
     },
     "sip": "Melhor dia do SIP",
     "sipHint": "últimos 3 / 5 / 10 anos",

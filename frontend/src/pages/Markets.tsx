@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { analyzeLink, getListings, refreshListings, type Listing, type ListingPage, type ShariahStatus } from '../api/listings'
+import { analyzeLink, getListings, refreshListings, type Listing, type ListingPage } from '../api/listings'
 import EnglishToggle from '../components/EnglishToggle'
 import { hasChinese, useEnglishNames } from '../lib/english'
 import { Alert, Button, Card, EmptyState, Icon, Input, PageHeader, Segmented, Select, Skeleton, Switch } from '../components/ui'
 import { cx } from '../lib/cx'
+import { ETHICAL_BADGE } from '../lib/ethical'
 import { compact, errorMessage, marketCap, pct, price, relativeTime, trendClass } from '../lib/format'
 import { labelFor, MARKETS, type Option } from '../lib/options'
 import { toast } from '../lib/toast'
@@ -33,13 +34,6 @@ const TYPES_BY_MARKET: Record<string, ListingType[]> = {
   hong_kong: ['all', 'stock', 'etf'],
   crypto: ['crypto'],
   all: ['all', 'stock', 'etf', 'mf', 'crypto'],
-}
-
-const SHARIAH_BADGE: Record<ShariahStatus, string> = {
-  halal: 'bg-up-soft text-up',
-  doubtful: 'bg-warn-soft text-warn',
-  haram: 'bg-down-soft text-down',
-  unknown: 'bg-raised text-muted',
 }
 
 const PAGE_SIZE = 50
@@ -102,21 +96,21 @@ export default function MarketsPage() {
   // Stable key for the advanced filters so the fetch effect re-runs on change.
   const filterKey = FILTER_KEYS.map((k) => params.get(k) ?? '').join('|')
   const filterCount = activeFilterCount(params)
-  // Non-halal badges only show while the Shariah filter is in use, to keep the table calm.
+  // Other tags only show while the Ethical filter is in use, to keep the table calm.
   const shariahFilter = Boolean(params.get('sh'))
   const shariahValue = params.get('sh') ?? ''
 
-  const halalOnly = shariahValue === 'halal'
+  const halalOnly = shariahValue === 'ethical' || shariahValue === 'halal'
   const shariahScreened = market !== 'crypto'
 
   function setHalalOnly(on: boolean) {
     writeHalalPref(on)
-    update({ sh: on ? 'halal' : null })
+    update({ sh: on ? 'ethical' : null })
   }
 
   // Bring back a remembered "Ethical only" when the page opens without a Shariah filter of its own.
   useEffect(() => {
-    if (!params.get('sh') && shariahScreened && readHalalPref()) update({ sh: 'halal' })
+    if (!params.get('sh') && shariahScreened && readHalalPref()) update({ sh: 'ethical' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -651,9 +645,9 @@ export default function MarketsPage() {
                           {type === 'all' && row.type !== 'stock' && (
                             <span className="rounded bg-raised px-1 text-[12px] uppercase">{row.type === 'mf' ? t('fund') : row.type}</span>
                           )}
-                          {row.shariah && (row.shariah === 'halal' || shariahFilter) && (
+                          {row.shariah && (row.shariah === 'ethical' || shariahFilter) && (
                             <span
-                              className={cx('rounded px-1 text-[12px] font-medium', SHARIAH_BADGE[row.shariah])}
+                              className={cx('rounded px-1 text-[12px] font-medium', ETHICAL_BADGE[row.shariah])}
                               title={row.shariah_reason}
                             >
                               {t(`badge.${row.shariah}`)}

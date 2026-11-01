@@ -1,24 +1,17 @@
-"""Full Shariah screen for one stock: business activity + financial ratios.
+"""Ethical screen for one stock: what the business does, plus the debt,
+cash and interest-income numbers.
 
-Methodology (the common ground of the major Islamic index providers):
+Owner's rule: no verdict. We never call a stock halal / haram / compliant
+or pass / fail. The business gets a factual tag (see src/data/shariah.py)
+and each ratio is shown with the reference levels index providers use, so
+the investor can decide:
+      interest-bearing debt          vs 33% (stricter 30%) of average market cap
+      cash + interest-bearing assets vs 33% (stricter 30%) of average market cap
+      receivables + cash             vs 49% of average market cap
+      interest income                vs 5% of revenue
 
-* Business screen - the core business must not be interest-based finance,
-  insurance, alcohol, tobacco, pork, gambling, adult entertainment or
-  weapons. Mixed businesses (hotels, media, REITs) are flagged doubtful.
-* Financial screens - S&P / Dow Jones Islamic style, the basis of the
-  Nifty / BSE Shariah indices that Indian "Ethical" funds track:
-      interest-bearing debt          < 33% of 36-month average market cap
-      cash + interest-bearing assets < 33% of 36-month average market cap
-      receivables + cash             < 49% of 36-month average market cap
-  AAOIFI uses a stricter 30% for the first two; a stock between 30% and
-  33% passes S&P but not AAOIFI and is reported as doubtful.
-* Non-permissible income - interest income must stay under 5% of revenue.
-  That share of any dividend (or gain) should be given to charity
-  ("purification").
-
-Market cap falls back to total assets (MSCI / FTSE style) when Yahoo has
-no price history. Everything comes from Yahoo Finance and is best-effort:
-this is a screening aid, not a fatwa.
+Market cap falls back to total assets when there is no price history.
+Best-effort data from company statements.
 """
 
 from __future__ import annotations
@@ -28,7 +21,7 @@ import threading
 import time
 from typing import Optional
 
-from marketmyna.data.shariah import DOUBTFUL, HALAL, HARAM, UNKNOWN, business_status, screen_row
+from marketmyna.data.shariah import EXCLUDED, INTEREST, MIXED, ETHICAL, UNKNOWN, business_status, screen_row
 
 from .financials import BALANCE_ROWS, _div, _extract, _num, _periods
 
@@ -47,25 +40,18 @@ _TTL = 6 * 3600
 _cache: dict[tuple[str, str], tuple[float, dict]] = {}
 _lock = threading.Lock()
 
-VERDICT_LABELS = {
-    HALAL: "Ethical",
-    DOUBTFUL: "Doubtful",
-    HARAM: "Not ethical",
-    UNKNOWN: "Not enough data",
+TAG_LABELS = {
+    ETHICAL: "Ethical business",
+    INTEREST: "Interest-based business",
+    MIXED: "Mixed activity",
+    EXCLUDED: "Excluded activity",
+    UNKNOWN: "Not classified",
 }
 
 
 def _check(key: str, label: str, value: Optional[float], limit: float, basis: str, strict: Optional[float] = None) -> dict:
-    """One ratio test. status: pass | fail | borderline (passes S&P, fails AAOIFI) | unknown."""
-    if value is None:
-        status = "unknown"
-    elif value >= limit:
-        status = "fail"
-    elif strict is not None and value >= strict:
-        status = "borderline"
-    else:
-        status = "pass"
-    return {"key": key, "label": label, "value": value, "limit": limit, "strict_limit": strict, "basis": basis, "status": status}
+    """One ratio with its reference levels - a number, never a pass / fail."""
+    return {"key": key, "label": label, "value": value, "reference": limit, "strict_reference": strict, "basis": basis}
 
 
 def _avg_market_cap(ticker, info: dict) -> tuple[Optional[float], str]:
@@ -85,7 +71,7 @@ def _avg_market_cap(ticker, info: dict) -> tuple[Optional[float], str]:
             mcap = mcap * float(closes.mean()) / float(closes.iloc[-1])
             basis = f"{len(closes)}-month average market cap"
     except Exception as exc:
-        logger.info("Shariah: price history failed: %s", exc)
+        logger.info("Ethical screen: price history failed: %s", exc)
 
     trade_ccy = info.get("currency")
     fin_ccy = info.get("financialCurrency")
@@ -101,7 +87,7 @@ def _avg_market_cap(ticker, info: dict) -> tuple[Optional[float], str]:
             mcap = mcap * float(fx.iloc[-1])
             basis += f" (converted {trade_ccy}→{fin_ccy})"
         except Exception as exc:
-            logger.info("Shariah: FX %s->%s failed: %s", trade_ccy, fin_ccy, exc)
+            logger.info("Ethical screen: FX %s->%s failed: %s", trade_ccy, fin_ccy, exc)
             return None, ""
     return mcap, basis
 
@@ -140,7 +126,7 @@ def _build(symbol: str, market: str) -> dict:
     try:
         info = ticker.info or {}
     except Exception as exc:
-        logger.info("Shariah info for %s failed: %s", symbol, exc)
+        logger.info("Ethical screen info for %s failed: %s", symbol, exc)
     name = info.get("longName") or info.get("shortName") or symbol
     base = {
         "symbol": symbol,
@@ -158,12 +144,8 @@ def _build(symbol: str, market: str) -> dict:
         return {
             **base,
             "kind": "fund",
-            "verdict": status,
-            "verdict_label": VERDICT_LABELS[status],
-            "business": {"status": status, "reason": reason, "flags": []},
+            "business": {"status": status, "label": TAG_LABELS[status], "reason": reason, "flags": []},
             "checks": [],
-            "purification_pct": None,
-            "reasons": [reason],
         }
 
     bal_df = ticker.balance_sheet
@@ -203,44 +185,11 @@ def _build(symbol: str, market: str) -> dict:
         # Yahoo omits the line for many companies; treat as not reported rather than failing the stock.
         checks[-1]["note"] = "Not reported separately - read the annual report's 'other income' note"
 
-    reasons: list[str] = []
-    if b_status == HARAM:
-        verdict = HARAM
-        reasons.append(b_reason)
-    else:
-        failed = [c for c in checks if c["status"] == "fail"]
-        borderline = [c for c in checks if c["status"] == "borderline"]
-        missing = [c for c in checks[:2] if c["status"] == "unknown"]
-        for c in failed:
-            reasons.append(f"{c['label']} is {c['value']:.1f}% of {c['basis']} (limit {c['limit']:.0f}%)")
-        for c in borderline:
-            reasons.append(f"{c['label']} is {c['value']:.1f}% - within the standard {c['limit']:.0f}% limit but above the stricter {c['strict_limit']:.0f}%")
-        if b_status in (DOUBTFUL, UNKNOWN):
-            reasons.append(b_reason)
-        if missing:
-            reasons.append("Missing balance-sheet data: " + ", ".join(c["label"].lower() for c in missing))
-        if failed:
-            verdict = HARAM
-        elif borderline or b_status == DOUBTFUL:
-            verdict = DOUBTFUL
-        elif missing or b_status == UNKNOWN:
-            verdict = UNKNOWN if len(missing) == 2 else DOUBTFUL
-        else:
-            verdict = HALAL
-            reasons.append(b_reason)
-            reasons.append("Debt, cash and receivables are all within the standard and the stricter limits")
-
-    # Purification only applies to a stock one may hold.
-    purification = _pct(interest_income, revenue) if verdict != HARAM else None
     return {
         **base,
         "kind": "stock",
-        "verdict": verdict,
-        "verdict_label": VERDICT_LABELS[verdict],
-        "business": {"status": b_status, "reason": b_reason, "flags": flags},
+        "business": {"status": b_status, "label": TAG_LABELS[b_status], "reason": b_reason, "flags": flags},
         "checks": checks,
         "market_cap_basis": basis or None,
         "period": str(periods[0])[:10] if periods else None,
-        "purification_pct": purification,
-        "reasons": reasons,
     }

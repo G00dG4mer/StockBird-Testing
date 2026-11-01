@@ -14,8 +14,8 @@
     "count_one": "{{n}} ética",
     "count_many": "{{n}} éticas",
     "count_other": "{{n}} éticas",
-    "onDescription": "Se muestran empresas y fondos que pasan el filtro ético. Abre una acción para ver sus ratios de deuda, efectivo e ingresos por intereses y la parte de los dividendos que conviene donar.",
-    "offDescription": "Oculta bancos, aseguradoras, alcohol, tabaco, juego y otros negocios excluidos, además de los fondos convencionales."
+    "onDescription": "Se muestran negocios sin actividad excluida ni basada en intereses, y fondos con filtro ético. Abre una acción para ver su deuda, su caja y sus ingresos por intereses.",
+    "offDescription": "Excluye alcohol, tabaco, juegos de azar y otros negocios excluidos, bancos y aseguradoras, y fondos de deuda y convencionales."
   },
   "marketTabs": {
     "india": {
@@ -73,10 +73,11 @@
   "loadError": "No se pudo cargar el listado",
   "categoryGuessed": "Categoría deducida del nombre de la empresa",
   "badge": {
-    "halal": "Ética",
-    "doubtful": "Dudosa",
-    "haram": "No ética",
-    "unknown": "Sin filtrar"
+    "ethical": "Ética",
+    "interest": "Con intereses",
+    "mixed": "Mixta",
+    "excluded": "Excluida",
+    "unknown": "Sin clasificar"
   },
   "empty": {
     "title": "Ningún resultado",
@@ -119,14 +120,16 @@
     "ethical": "Ética",
     "ethicalHint": "filtro de inversión ética",
     "shariah": {
-      "halal": "Éticas",
-      "halalHint": "Fondos: mandato con filtro ético. Acciones: el negocio pasa el filtro; abre la acción para ver los ratios de deuda / efectivo / ingresos por intereses",
-      "doubtful": "Dudosas",
-      "doubtfulHint": "Actividad mixta (hoteles, medios, REIT…): revisa las fuentes de ingresos",
-      "haram": "No cumplen",
-      "haramHint": "Finanzas o seguros basados en intereses, alcohol, tabaco, juego, cerdo, armas, contenido adulto, o un fondo convencional / con intereses",
+      "ethical": "Negocio ético",
+      "ethicalHint": "Acciones: sin actividad excluida ni basada en intereses. Fondos: mandato con filtro ético. La deuda y los intereses están en la página de la acción",
+      "interest": "Basado en intereses",
+      "interestHint": "Bancos, prestamistas, aseguradoras y brókeres; fondos de deuda, mixtos y apalancados",
+      "mixed": "Actividad mixta",
+      "mixedHint": "Hoteles, medios, REIT, fondos de todos los sectores... - revisa de dónde vienen los ingresos",
+      "excluded": "Actividad excluida",
+      "excludedHint": "Alcohol, tabaco, juegos de azar, cerdo, contenido para adultos, armas, cannabis",
       "unknown": "Sin clasificar",
-      "unknownHint": "Sin datos de sector: abre la acción para un análisis completo"
+      "unknownHint": "Sin datos de sector - abre la acción para ver detalles"
     },
     "sip": "Mejor día SIP",
     "sipHint": "últimos 3 / 5 / 10 años",

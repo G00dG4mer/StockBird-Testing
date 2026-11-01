@@ -44,7 +44,7 @@ def list_instruments(
     max_cap: Optional[float] = Query(default=None),
     category: str = Query(default="", description="Comma-separated broad categories, e.g. Technology,Agriculture"),
     cap: str = Query(default="", description="Comma-separated size bands: large,mid,small,micro"),
-    shariah: str = Query(default="", description="Comma-separated Shariah screen statuses: halal,doubtful,haram,unknown"),
+    shariah: str = Query(default="", description="Comma-separated ethical tags: ethical,interest,mixed,excluded,unknown"),
     price_min: Optional[float] = Query(default=None, ge=0),
     price_max: Optional[float] = Query(default=None, ge=0),
     change_min: Optional[float] = Query(default=None, description="Day change %, lower bound"),

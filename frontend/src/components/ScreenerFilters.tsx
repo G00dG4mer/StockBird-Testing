@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ListingQuery, ShariahStatus, SipEdge } from '../api/listings'
+import { ETHICAL_TAGS } from '../lib/ethical'
 import { cx } from '../lib/cx'
 import { Icon, Input } from './ui'
 
@@ -35,7 +36,9 @@ const CHANGE_PRESETS = {
 
 export const W52_PRESETS = ['high', 'low'] as const
 
-const SHARIAH_OPTIONS: ShariahStatus[] = ['halal', 'doubtful', 'haram', 'unknown']
+// Old links (?sh=halal) map onto the new tags.
+const LEGACY_TAGS: Record<string, ShariahStatus[]> = { halal: ['ethical'], doubtful: ['mixed'], haram: ['interest', 'excluded'] }
+const ethicalTags = (values: string[]) => [...new Set(values.flatMap((v) => LEGACY_TAGS[v] ?? [v]))]
 
 const SIP_EDGE_OPTIONS: SipEdge[] = ['consistent', 'no_edge', 'negligible', 'short']
 
@@ -161,7 +164,7 @@ export default function ScreenerFilters({
   const { t } = useTranslation('markets')
   const cats = list(params.get('cat'))
   const caps = list(params.get('cap'))
-  const shariah = list(params.get('sh'))
+  const shariah = ethicalTags(list(params.get('sh')))
   const sip = list(params.get('sip'))
   const pmin = params.get('pmin') ?? ''
   const pmax = params.get('pmax') ?? ''
@@ -200,7 +203,7 @@ export default function ScreenerFilters({
 
       {showShariah && (
         <Row label={t('filters.ethical')} hint={t('filters.ethicalHint')}>
-          {SHARIAH_OPTIONS.map((o) => (
+          {ETHICAL_TAGS.map((o) => (
             <Chip key={o} active={shariah.includes(o)} onClick={() => toggle('sh', shariah, o)} title={t(`filters.shariah.${o}Hint`)}>
               {t(`filters.shariah.${o}`)} <span className="text-faint">{(shariahCounts?.[o] ?? 0).toLocaleString()}</span>
             </Chip>

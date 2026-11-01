@@ -1,5 +1,6 @@
 import { saveBlob } from '../lib/files'
 import { apiClient } from './client'
+import type { ShariahStatus } from './listings'
 
 export interface Quote {
   symbol: string
@@ -269,18 +270,16 @@ export async function getCeoBrief(symbol: string, market = 'us'): Promise<CeoBri
   return res.data
 }
 
-export type ShariahVerdict = 'halal' | 'doubtful' | 'haram' | 'unknown'
-
 export interface ShariahCheck {
   key: 'debt' | 'cash' | 'receivables' | 'interest_income'
   label: string
-  /** Percent of `basis`, or null when Yahoo has no figure. */
+  /** Percent of `basis`, or null when there is no figure. */
   value: number | null
-  limit: number
-  /** AAOIFI's stricter limit, where it differs. */
-  strict_limit: number | null
+  /** The level index providers use - shown as a marker, never a pass / fail. */
+  reference: number
+  /** The stricter level some standards use, where it differs. */
+  strict_reference: number | null
   basis: string
-  status: 'pass' | 'fail' | 'borderline' | 'unknown'
   note?: string
 }
 
@@ -292,15 +291,10 @@ export interface ShariahProfile {
   industry: string | null
   currency: string | null
   kind: 'stock' | 'fund'
-  verdict: ShariahVerdict
-  verdict_label: string
-  business: { status: ShariahVerdict; reason: string; flags: string[] }
+  business: { status: ShariahStatus; label: string; reason: string; flags: string[] }
   checks: ShariahCheck[]
   market_cap_basis?: string | null
   period?: string | null
-  /** Interest income as % of revenue - the share of dividends to give away. */
-  purification_pct: number | null
-  reasons: string[]
   source: string
 }
 

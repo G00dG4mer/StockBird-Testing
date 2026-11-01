@@ -12,8 +12,8 @@
     "only": "Ethical only",
     "count_one": "{{n}} ethical",
     "count_other": "{{n}} ethical",
-    "onDescription": "Showing businesses and funds that pass the ethical screen. Open a stock for its debt, cash and interest-income ratios and the share of dividends to give to charity.",
-    "offDescription": "Hide banks, insurers, alcohol, tobacco, gambling and other excluded businesses, and conventional funds."
+    "onDescription": "Showing businesses with no excluded or interest-based activity, and ethically screened funds. Open a stock for its debt, cash and interest-income numbers.",
+    "offDescription": "Leave out alcohol, tobacco, gambling and other excluded businesses, banks and insurers, and debt and conventional funds."
   },
   "marketTabs": {
     "india": { "label": "India", "hint": "Every NSE stock & ETF + every AMFI mutual fund" },
@@ -39,7 +39,7 @@
   "retrying": "Retrying automatically.",
   "loadError": "Could not load listings",
   "categoryGuessed": "Category guessed from the company name",
-  "badge": { "halal": "Ethical", "doubtful": "Doubtful", "haram": "Not ethical", "unknown": "Unscreened" },
+  "badge": { "ethical": "Ethical", "interest": "Interest-based", "mixed": "Mixed", "excluded": "Excluded", "unknown": "Unclassified" },
   "empty": {
     "title": "No listings match",
     "noData": "This market has no data yet - see the warning above.",
@@ -81,14 +81,16 @@
     "ethical": "Ethical",
     "ethicalHint": "ethical investing screen",
     "shariah": {
-      "halal": "Ethical",
-      "halalHint": "Funds: ethically screened mandate. Stocks: the business passes the screen - open the stock for the debt / cash / interest-income ratios",
-      "doubtful": "Doubtful",
-      "doubtfulHint": "Mixed activity (hotels, media, REITs, ...) - check revenue sources",
-      "haram": "Not compliant",
-      "haramHint": "Interest-based finance or insurance, alcohol, tobacco, gambling, pork, weapons, adult content - or an interest-bearing / conventional fund",
+      "ethical": "Ethical business",
+      "ethicalHint": "Stocks: no excluded or interest-based activity. Funds: ethically screened mandate. Debt and interest numbers are on the stock page",
+      "interest": "Interest-based",
+      "interestHint": "Banks, lenders, insurers and brokers; debt, hybrid and leveraged funds",
+      "mixed": "Mixed activity",
+      "mixedHint": "Hotels, media, REITs, all-sector funds ... - check where the revenue comes from",
+      "excluded": "Excluded activity",
+      "excludedHint": "Alcohol, tobacco, gambling, pork, adult content, weapons, cannabis",
       "unknown": "Unclassified",
-      "unknownHint": "No sector data - open the stock for a full screen"
+      "unknownHint": "No sector data - open the stock for details"
     },
     "sip": "Best SIP day",
     "sipHint": "past 3 / 5 / 10 years",

@@ -46,6 +46,7 @@ import requests
 from marketmyna.core.home import app_home
 
 from .categories import enrich
+from .shariah import normalize as normalize_tags
 from .shariah import stamp as stamp_shariah
 
 logger = logging.getLogger(__name__)
@@ -1182,15 +1183,16 @@ def query(
 ) -> dict:
     """Filter, facet, sort and page listing rows.
 
-    shariah keeps rows whose Shariah screen status (halal / doubtful /
-    haram / unknown, see marketmyna/data/shariah.py) is in the set.
+    shariah keeps rows whose ethical tag (ethical / interest / mixed /
+    excluded / unknown, see marketmyna/data/shariah.py) is in the set; old
+    halal / doubtful / haram values still map onto the new tags.
     near_high / near_low keep rows within that many percent of their
     52-week high / low. Price bounds are in each row's own currency.
     """
     q = q.strip().lower()
     wanted_categories = {c for c in categories if c}
     wanted_sizes = {c for c in cap_sizes if c}
-    wanted_shariah = {c for c in shariah if c}
+    wanted_shariah = normalize_tags(c for c in shariah if c)
     wanted_markets = {m for m in markets if m}
     market_counts: dict[str, int] = {}
     matched: list[tuple[int, dict]] = []
@@ -1198,6 +1200,10 @@ def query(
     types: dict[str, int] = {}
     category_counts: dict[str, int] = {}
     shariah_counts: dict[str, int] = {}
+    cap_filter = min_cap is not None or max_cap is not None or bool(wanted_sizes)
+    price_filter = price_min is not None or price_max is not None or near_high is not None or near_low is not None
+    change_filter = change_min is not None or change_max is not None
+    volume_filter = min_volume is not None or max_volume is not None
     for row in rows:
         if exchange and row.get("exchange") != exchange:
             continue
@@ -1205,34 +1211,40 @@ def query(
             continue
         if option and option.lower() not in (row.get("option") or "").lower():
             continue
-        cap = row.get("market_cap")
-        if min_cap is not None and (cap is None or cap < min_cap):
-            continue
-        if max_cap is not None and (cap is None or cap > max_cap):
-            continue
-        if wanted_sizes and cap_band(row) not in wanted_sizes:
-            continue
-        price = row.get("price")
-        if price_min is not None and (price is None or price < price_min):
-            continue
-        if price_max is not None and (price is None or price > price_max):
-            continue
-        change = row.get("change_percent")
-        if change_min is not None and (change is None or change < change_min):
-            continue
-        if change_max is not None and (change is None or change > change_max):
-            continue
-        if min_volume is not None and (row.get("volume") or 0) < min_volume:
-            continue
-        if max_volume is not None and (row.get("volume") is None or row["volume"] > max_volume):
-            continue
-        if near_high is not None:
-            gap = _pct_from(price, row.get("high_52w"))
-            if gap is None or gap > near_high:
+        # Only read the fields a filter asks for: most requests set none of these.
+        if cap_filter:
+            cap = row.get("market_cap")
+            if min_cap is not None and (cap is None or cap < min_cap):
                 continue
-        if near_low is not None:
-            gap = _pct_from(price, row.get("low_52w"))
-            if gap is None or gap > near_low:
+            if max_cap is not None and (cap is None or cap > max_cap):
+                continue
+            if wanted_sizes and cap_band(row) not in wanted_sizes:
+                continue
+        if price_filter:
+            price = row.get("price")
+            if price_min is not None and (price is None or price < price_min):
+                continue
+            if price_max is not None and (price is None or price > price_max):
+                continue
+            if near_high is not None:
+                gap = _pct_from(price, row.get("high_52w"))
+                if gap is None or gap > near_high:
+                    continue
+            if near_low is not None:
+                gap = _pct_from(price, row.get("low_52w"))
+                if gap is None or gap > near_low:
+                    continue
+        if change_filter:
+            change = row.get("change_percent")
+            if change_min is not None and (change is None or change < change_min):
+                continue
+            if change_max is not None and (change is None or change > change_max):
+                continue
+        if volume_filter:
+            volume = row.get("volume")
+            if min_volume is not None and (volume or 0) < min_volume:
+                continue
+            if max_volume is not None and (volume is None or volume > max_volume):
                 continue
         rank = 0
         if q:
@@ -1243,21 +1255,22 @@ def query(
 
         # Each facet ignores its own filter so the type tabs, category
         # chips and industry dropdown keep showing every choice + count.
-        type_ok = type_ == "all" or row["type"] == type_
-        market_ok = not wanted_markets or row.get("market") in wanted_markets
-        category_ok = not wanted_categories or row.get("category") in wanted_categories
-        sector_ok = not sector or row.get("sector") == sector
-        shariah_ok = not wanted_shariah or row.get("shariah") in wanted_shariah
+        rtype, mkt, cat, sec, tag = row["type"], row.get("market"), row.get("category"), row.get("sector"), row.get("shariah")
+        type_ok = type_ == "all" or rtype == type_
+        market_ok = not wanted_markets or mkt in wanted_markets
+        category_ok = not wanted_categories or cat in wanted_categories
+        sector_ok = not sector or sec == sector
+        shariah_ok = not wanted_shariah or tag in wanted_shariah
         if market_ok and category_ok and sector_ok and shariah_ok:
-            types[row["type"]] = types.get(row["type"], 0) + 1
-        if market_ok and type_ok and sector_ok and shariah_ok and row.get("category"):
-            category_counts[row["category"]] = category_counts.get(row["category"], 0) + 1
-        if market_ok and type_ok and category_ok and shariah_ok and row.get("sector"):
-            sectors[row["sector"]] = sectors.get(row["sector"], 0) + 1
-        if market_ok and type_ok and category_ok and sector_ok and row.get("shariah"):
-            shariah_counts[row["shariah"]] = shariah_counts.get(row["shariah"], 0) + 1
+            types[rtype] = types.get(rtype, 0) + 1
+        if market_ok and type_ok and sector_ok and shariah_ok and cat:
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+        if market_ok and type_ok and category_ok and shariah_ok and sec:
+            sectors[sec] = sectors.get(sec, 0) + 1
+        if market_ok and type_ok and category_ok and sector_ok and tag:
+            shariah_counts[tag] = shariah_counts.get(tag, 0) + 1
         if type_ok and category_ok and sector_ok and shariah_ok:
-            market_counts[row.get("market") or ""] = market_counts.get(row.get("market") or "", 0) + 1
+            market_counts[mkt or ""] = market_counts.get(mkt or "", 0) + 1
             if market_ok:
                 matched.append((rank, row))
 

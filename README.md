@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>Stock analysis, screening, portfolios and alerts in one app.</b><br>
-  AI analysts, Shariah screening and alerts on Telegram, for India, the US, China, Hong Kong and crypto.
+  AI analysts, ethical screening and alerts on Telegram, for India, the US, China, Hong Kong and crypto.
 </p>
 
 <p align="center">
@@ -44,10 +44,11 @@ no login, no plans and no limits: it has one owner (you), and every feature is o
   <tr>
     <td width="55%"><img src="https://raw.githubusercontent.com/pryndor/MarketMyna/main/docs/images/screener.webp" alt="Markets: every listing with the ethical filter and the insights menu"></td>
     <td width="45%" valign="top">
-      <h3>🔎 Screeners and Shariah screening</h3>
+      <h3>🔎 Screeners and ethical screening</h3>
       India (NSE, BSE, mutual funds, ETFs), US, China A-shares, Hong Kong and crypto, with ready-made
-      and custom screens. Ethical / Shariah checks for stocks, mutual funds and ETFs, with dividend
-      purification.
+      and custom screens. Ethical screening for stocks, mutual funds and ETFs: excluded businesses
+      (liquor, pornography, gambling and similar) are screened out, and debt and interest are shown as
+      numbers so you decide. No verdicts.
     </td>
   </tr>
   <tr>

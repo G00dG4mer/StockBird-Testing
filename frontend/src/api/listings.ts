@@ -2,9 +2,9 @@ import { apiClient } from './client'
 
 export type ListingType = 'stock' | 'etf' | 'mf' | 'crypto'
 
-/** Shariah screen status (see src/data/shariah.py). For stocks, halal
- * means the business activity passes; ratios are on the stock page. */
-export type ShariahStatus = 'halal' | 'doubtful' | 'haram' | 'unknown'
+/** Ethical tag (see src/data/shariah.py): a fact about the business, never
+ * a verdict. Debt and interest numbers are on the stock page. */
+export type ShariahStatus = 'ethical' | 'interest' | 'mixed' | 'excluded' | 'unknown'
 /** Historically best SIP day label (src/services/sip_days.py). */
 export type SipEdge = 'consistent' | 'no_edge' | 'short' | 'negligible'
 

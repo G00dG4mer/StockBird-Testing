@@ -1,6 +1,6 @@
 """Stock research from chat: the same services the Analyze page shows
 (quote, overview, valuation, financials, estimates, dividends, peers,
-Shariah screen, compare), as short text replies.
+ethical screen, compare), as short text replies.
 
 Every command takes SYMBOL [market]; "us:AAPL" works too. Without a
 market the symbol is looked up in the listings (see common.guess_market).
@@ -255,21 +255,22 @@ class ShariahCommand(_SymbolCommand):
     name = "ethical"
     aliases = ["shariah", "halal"]  # the old names keep working
     usage = "/ethical SYMBOL [market]"
-    description = "Ethical screen: business activity and the debt, cash and interest-income ratios."
+    description = "Ethical screen: what the business does, and its debt, cash and interest-income numbers."
     example = "/ethical AAPL us"
 
     def run(self, symbol, market, rest):
         from ...services.shariah import build_shariah_profile
 
         d = call_with_deadline(build_shariah_profile, 60, symbol, market)
-        lines = [f"{d.get('name') or symbol}: {d.get('verdict_label') or d.get('verdict') or 'no verdict'}"]
         b = d.get("business") or {}
+        lines = [f"{d.get('name') or symbol}: {b.get('label') or 'not classified'}"]
         if b.get("reason"):
             lines.append(f"Business: {b['reason']}")
         for c in d.get("checks") or []:
             v = "n/a" if c.get("value") is None else f"{c['value']:.1f}%"
-            lines.append(f"• {c['label']}: {v} (limit {c.get('limit')}%) {c.get('status', '')}")
-        lines.append("A screening aid, not a fatwa.")
+            ref = f"{c['reference']:g}%" + (f", stricter {c['strict_reference']:g}%" if c.get("strict_reference") else "")
+            lines.append(f"• {c['label']}: {v} of {c['basis']} (reference {ref})")
+        lines.append("Data only - you decide what fits your values.")
         return "\n".join(lines)
 
 

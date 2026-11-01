@@ -10,8 +10,8 @@
   "ethical": {
     "only": "仅看道德投资",
     "count_other": "{{n}} 个符合",
-    "onDescription": "正在显示通过道德筛选的公司和基金。打开个股可查看负债、现金和利息收入占比，以及应捐给慈善的股息比例。",
-    "offDescription": "隐藏银行、保险、酒类、烟草、博彩等被排除的行业，以及传统基金。"
+    "onDescription": "显示没有受排除行业或以利息为主业务的公司,以及经道德筛选的基金。打开股票可查看其负债、现金和利息收入数据。",
+    "offDescription": "排除酒类、烟草、博彩等受排除行业,银行和保险公司,以及债券基金和普通基金。"
   },
   "marketTabs": {
     "india": {
@@ -69,10 +69,11 @@
   "loadError": "无法加载列表",
   "categoryGuessed": "类别根据公司名称推断",
   "badge": {
-    "halal": "符合道德",
-    "doubtful": "存疑",
-    "haram": "不符合",
-    "unknown": "未筛选"
+    "ethical": "道德企业",
+    "interest": "利息业务",
+    "mixed": "混合",
+    "excluded": "受排除",
+    "unknown": "未分类"
   },
   "empty": {
     "title": "没有匹配的结果",
@@ -115,14 +116,16 @@
     "ethical": "道德",
     "ethicalHint": "道德投资筛选",
     "shariah": {
-      "halal": "符合道德",
-      "halalHint": "基金：投资范围经过道德筛选。股票：业务通过筛选 - 打开个股查看负债 / 现金 / 利息收入比率",
-      "doubtful": "存疑",
-      "doubtfulHint": "业务混合（酒店、媒体、REIT 等）- 请查看收入来源",
-      "haram": "不符合",
-      "haramHint": "基于利息的金融或保险、酒类、烟草、博彩、猪肉、武器、成人内容 - 或计息 / 传统基金",
+      "ethical": "道德企业",
+      "ethicalHint": "股票:无受排除行业或以利息为主的业务。基金:道德筛选授权。负债和利息数据见股票页面",
+      "interest": "以利息为主",
+      "interestHint": "银行、放贷机构、保险公司和券商;债券、混合和杠杆基金",
+      "mixed": "混合业务",
+      "mixedHint": "酒店、传媒、REIT、全行业基金等 - 请查看收入来源",
+      "excluded": "受排除行业",
+      "excludedHint": "酒类、烟草、博彩、猪肉、成人内容、武器、大麻",
       "unknown": "未分类",
-      "unknownHint": "没有行业数据 - 打开个股进行完整筛选"
+      "unknownHint": "无行业数据 - 打开股票查看详情"
     },
     "sip": "最佳定投日",
     "sipHint": "近 3 / 5 / 10 年",

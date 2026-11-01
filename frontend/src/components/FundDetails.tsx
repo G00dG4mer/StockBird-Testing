@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { getFundHistory, searchListings, type Listing, type NavPoint } from '../api/listings'
 import { cx } from '../lib/cx'
+import { ETHICAL_BADGE, ETHICAL_LABEL } from '../lib/ethical'
 import { errorMessage, num, pct, price } from '../lib/format'
 import { Segmented, Skeleton, Stat } from './ui'
 import FundAiReview from './FundAiReview'
@@ -84,14 +85,9 @@ export function FundDetails({ fund, onOpenFund }: { fund: Listing; onOpenFund?: 
           <div id="fund-overview" data-section="Overview" className="scroll-mt-6 space-y-6">
             {fund.shariah && fund.shariah_reason && (
               <div
-                className={cx(
-                  'rounded-lg px-3 py-2 text-xs',
-                  fund.shariah === 'halal' ? 'bg-up-soft text-up' : fund.shariah === 'doubtful' ? 'bg-warn-soft text-warn' : 'bg-raised text-muted',
-                )}
+                className={cx('rounded-lg px-3 py-2 text-xs', ETHICAL_BADGE[fund.shariah])}
               >
-                <span className="font-semibold">
-                  {fund.shariah === 'halal' ? 'Ethical' : fund.shariah === 'doubtful' ? 'Ethical: doubtful' : 'Not ethical'}
-                </span>{' '}
+                <span className="font-semibold">{ETHICAL_LABEL[fund.shariah]}</span>{' '}
                 · {fund.shariah_reason}
               </div>
             )}
