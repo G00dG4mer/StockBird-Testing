@@ -69,7 +69,8 @@
       "active": "定时任务运行中",
       "off": "定时任务已关闭"
     },
-    "update": "有可用更新"
+    "update": "有可用更新",
+    "updateFound": {"title": "发现更新", "release": "MarketMyna {{version}} 已发布", "code": "GitHub 上有更新的代码", "view": "查看"}
   },
   "area": {
     "label": "版块",

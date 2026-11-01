@@ -245,3 +245,18 @@ html {
   --tracking-wider: 0em;
   --tracking-widest: 0em;
 }
+
+/* Update found: the small card slides in from the side. */
+@keyframes update-notice-kf {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+.update-notice-in { animation: update-notice-kf 0.25s ease-out; }
+:root[dir='rtl'] .update-notice-in { animation-name: update-notice-rtl-kf; }
+@keyframes update-notice-rtl-kf {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-notice-in { animation: none; }
+}

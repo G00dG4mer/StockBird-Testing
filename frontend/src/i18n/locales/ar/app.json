@@ -69,7 +69,8 @@
       "active": "الجدولة مفعّلة",
       "off": "الجدولة متوقفة"
     },
-    "update": "يتوفر تحديث"
+    "update": "يتوفر تحديث",
+    "updateFound": {"title": "تم العثور على تحديث", "release": "يتوفر MarketMyna {{version}}", "code": "يوجد رمز أحدث على GitHub", "view": "عرض"}
   },
   "area": {
     "label": "القسم",

@@ -3,10 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { apiClient } from '../api/client'
 import { getSchedulerStatus } from '../api/scheduler'
-import { getUpdateStatus } from '../api/updates'
 import { Icon, Skeleton, StatusDot, type IconName } from './ui'
 import { cx } from '../lib/cx'
 import { Toaster } from './Toaster'
+import UpdateNotice from './UpdateNotice'
+import { useUpdateNotice } from '../lib/updateNotice'
 import { setTheme, useTheme } from '../lib/theme'
 import { useSession } from '../lib/session'
 import { SECTIONS, shows, useSection, type Section } from '../lib/section'
@@ -132,31 +133,9 @@ function UserChip({ compact = false }: { compact?: boolean }) {
   )
 }
 
-/** Whether the server's own GitHub check (Settings -> Updates) found a new
- * version. Reads its last result once a minute; never calls GitHub itself. */
-function useUpdateAvailable(): boolean {
-  const admin = useSession((s) => s.me?.role === 'admin')
-  const [available, setAvailable] = useState(false)
-  useEffect(() => {
-    if (!admin) return
-    let cancelled = false
-    const load = () =>
-      getUpdateStatus()
-        .then((s) => !cancelled && setAvailable(Boolean(s.update_available)))
-        .catch(() => {})
-    load()
-    const timer = window.setInterval(load, 60_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [admin])
-  return available
-}
-
 function StatusLines({ api, scheduler }: { api: Health; scheduler: boolean | null }) {
   const { t } = useTranslation('app')
-  const update = useUpdateAvailable()
+  const update = useUpdateNotice((s) => s.available)
   return (
     <>
       {update && (
@@ -368,6 +347,7 @@ export default function Layout() {
       <BottomNav onMore={() => setMoreOpen(true)} moreActive={moreActive || moreOpen} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} api={api} scheduler={scheduler} />
       <Toaster />
+      <UpdateNotice />
     </div>
   )
 }

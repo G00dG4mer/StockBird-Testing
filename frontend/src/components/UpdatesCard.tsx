@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiClient } from '../api/client'
 import { applyUpdate, checkUpdates, getUpdateStatus, saveUpdateSettings, type UpdateCheck } from '../api/updates'
 import { toast } from '../lib/toast'
+import { reportUpdateCheck } from '../lib/updateNotice'
 import { errorMessage, relativeTime } from '../lib/format'
 import { Alert, Badge, Button, Card, CardBody, CardHeader, Select, Spinner } from './ui'
 
@@ -15,7 +16,7 @@ const INTERVALS = [
   { value: '5', label: 'Every 5 minutes' },
   { value: '60', label: 'Every hour' },
   { value: '120', label: 'Every 2 hours' },
-  { value: '0', label: 'Off' },
+  { value: '0', label: 'Off (manual check only)' },
 ]
 
 type Phase = 'idle' | 'confirm' | 'installing' | 'restarting'
@@ -65,8 +66,8 @@ export default function UpdatesCard() {
       setResult(data)
       if (data.settings) setIntervalMinutes(String(data.settings.interval_minutes))
       if (data.error) return
-      if (data.update_available) toast.info(data.release_available ? `MarketMyna ${data.latest} is available` : 'New code is on GitHub')
-      else toast.success("You're on the latest version")
+      reportUpdateCheck(data, true)
+      if (!data.update_available) toast.success("You're on the latest version")
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -149,7 +150,7 @@ export default function UpdatesCard() {
             onChange={(e) => void changeInterval(e.target.value)}
             className="w-auto"
           />
-          <span className="text-xs text-faint">The app checks while it runs; a new version also shows in the sidebar.</span>
+          <span className="text-xs text-faint">Automatic or manual, a new version pops up on the right for a few seconds and shows in the sidebar.</span>
         </div>
 
         {error && (

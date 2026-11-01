@@ -25,7 +25,8 @@
   "status": {
     "api": { "checking": "API checking", "online": "API online", "offline": "API offline" },
     "schedule": { "unknown": "Schedule unknown", "active": "Schedule active", "off": "Schedule off" },
-    "update": "Update available"
+    "update": "Update available",
+    "updateFound": {"title": "Update found", "release": "MarketMyna {{version}} is available", "code": "Newer code is on GitHub", "view": "View"}
   },
   "area": {
     "label": "Area",

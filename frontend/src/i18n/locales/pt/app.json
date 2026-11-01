@@ -69,7 +69,8 @@
       "active": "Agendamento ativo",
       "off": "Agendamento desligado"
     },
-    "update": "Atualização disponível"
+    "update": "Atualização disponível",
+    "updateFound": {"title": "Atualização encontrada", "release": "MarketMyna {{version}} está disponível", "code": "Há código mais recente no GitHub", "view": "Ver"}
   },
   "area": {
     "label": "Área",
