@@ -1,5 +1,5 @@
-// MarketMyna service worker: shows server push notifications (reports,
-// alerts) even when no MarketMyna tab is open, and opens the app on click.
+// StockBird service worker: shows server push notifications (reports,
+// alerts) even when no StockBird tab is open, and opens the app on click.
 
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
@@ -11,11 +11,11 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { body: event.data ? event.data.text() : '' }
   }
-  const title = data.title || 'MarketMyna'
+  const title = data.title || 'StockBird'
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || '',
-      tag: data.tag || 'marketmyna',
+      tag: data.tag || 'stockbird',
       icon: '/icon-192.png',
       badge: '/favicon.png',
       data: { url: data.url || '/' },
