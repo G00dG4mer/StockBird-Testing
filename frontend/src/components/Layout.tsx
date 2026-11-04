@@ -22,7 +22,7 @@ function Brand({ showName = true }: { showName?: boolean }) {
   return (
     <>
       <Logo className="h-8 w-8 shrink-0" />
-      {showName && <span className="text-[15px] font-semibold tracking-tight">MarketMyna</span>}
+      {showName && <span className="text-[15px] font-semibold tracking-tight">StockBird</span>}
     </>
   )
 }
@@ -279,7 +279,7 @@ export default function Layout() {
       {/* Tablet (md): icon rail with small labels. Desktop (lg): full sidebar. */}
       <aside className="hidden shrink-0 flex-col border-e border-line bg-sidebar md:sticky md:top-0 md:z-30 md:flex md:h-screen md:w-[84px] lg:w-56">
         <div className="flex items-center justify-center gap-2.5 py-5 lg:justify-start lg:px-5">
-          <span className="lg:hidden" title="MarketMyna">
+          <span className="lg:hidden" title="StockBird">
             <Brand showName={false} />
           </span>
           <span className="hidden items-center gap-2.5 lg:flex">
@@ -331,7 +331,7 @@ export default function Layout() {
           <div className="border-b border-down/30 bg-down-soft px-4 py-2 text-sm text-down sm:px-6">
             {import.meta.env.DEV ? (
               <>
-                MarketMyna API unreachable. Start it with <code className="font-mono">python -m uvicorn api.app:app --port 8001</code> (or set MARKETMYNA_API for another port).
+                StockBird API unreachable. Start it with <code className="font-mono">python -m uvicorn api.app:app --port 8001</code> (or set MARKETMYNA_API for another port).
               </>
             ) : (
               t('offline')
