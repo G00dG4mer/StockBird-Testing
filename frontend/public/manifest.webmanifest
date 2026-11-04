@@ -1,7 +1,7 @@
 {
-  "name": "MarketMyna: AI Stock Analysis & Shariah Screener",
-  "short_name": "MarketMyna",
-  "description": "AI stock analysis, Shariah (halal) stock screening, screeners, charts, mutual fund tracking and alerts for India, US, China, Hong Kong and crypto.",
+  "name": "StockBird",
+  "short_name": "StockBird",
+  "description": "AI-powered stock analysis, screening, portfolios, charts and alerts.",
   "lang": "en-IN",
   "categories": [
     "finance",
